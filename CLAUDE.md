@@ -18,11 +18,14 @@ schemas/        — Database table extensions. Open.
 dashboards/     — Frontend templates (Vercel/Netlify). Open.
 integrations/   — MCP extensions, webhooks, capture sources. Open.
 skills/         — Reusable AI client skills and prompt packs. Open.
+server/         — Canonical Open Brain MCP server (Hono + Deno, deployed as a Supabase Edge Function). Reference implementation for `search_thoughts` / `list_thoughts` and the contract every extension's MCP tools follow.
 docs/           — Setup guides, FAQ, companion prompts.
 resources/      — Official companion files and packaged exports.
 ```
 
 Every contribution lives in its own subfolder under the right category and must include `README.md` + `metadata.json`.
+
+Each category has a `_template/` folder with a starter README and `metadata.json`. Copy, don't edit — the PR gate excludes templates from contribution checks.
 
 ## Guard Rails
 
@@ -32,20 +35,42 @@ Every contribution lives in its own subfolder under the right category and must 
 - **No `DROP TABLE`, `DROP DATABASE`, `TRUNCATE`, or unqualified `DELETE FROM`** in SQL files.
 - **MCP servers must be remote (Supabase Edge Functions), not local.** Never use `claude_desktop_config.json`, `StdioServerTransport`, or local Node.js servers. All extensions deploy as Edge Functions and connect via Claude Desktop's custom connectors UI (Settings → Connectors → Add custom connector → paste URL). See `docs/01-getting-started.md` Step 7 for the pattern.
 
+## Common Commands
+
+This repo has no top-level `package.json` — work happens inside contribution folders. The few cross-repo commands worth knowing:
+
+- **Markdown lint** (mirrors `.github/workflows/markdown-lint.yml`):
+  `npx markdownlint-cli2 --config .github/.markdownlint.jsonc "**/*.md"`
+- **Validate a `metadata.json`** against the repo schema:
+  `python3 -m pip install check-jsonschema && check-jsonschema --schemafile .github/metadata.schema.json <path>/metadata.json`
+- **Typecheck the canonical MCP server** (Deno):
+  `cd server && deno check index.ts`
+- **Read `.github/workflows/ob1-gate.yml`** to step through the deterministic PR rules locally — it's a single bash script and is the source of truth for what a contribution must satisfy.
+
+## CI Workflows
+
+- `.github/workflows/ob1-gate.yml` — **OB1 PR Gate.** Deterministic bash checks (folder structure, metadata schema, secrets scan, SQL safety, README completeness, broken links, remote-MCP enforcement, tool-audit link). Must pass before human review. Skipped for `[docs]` PRs.
+- `.github/workflows/claude-review.yml` — LLM clarity/alignment review (qualitative; complements the gate).
+- `.github/workflows/markdown-lint.yml` — `markdownlint-cli2` on changed `.md` files.
+
+When the gate fails, read its inline comment on the PR — it names exactly which rule and which file.
+
 ## PR Standards
 
 - **Title format:** `[category] Short description` (e.g., `[recipes] Email history import via Gmail API`, `[skills] Panning for Gold standalone skill pack`)
 - **Branch convention:** `contrib/<github-username>/<short-description>`
 - **Commit prefixes:** `[category]` matching the contribution type
-- Every PR must pass the automated review checks in `.github/workflows/ob1-review.yml` before human review
+- Every PR must pass the automated review checks in `.github/workflows/ob1-gate.yml` before human review
 - See `CONTRIBUTING.md` for the full review process, metadata.json template, and README requirements
 
 ## Key Files
 
 - `CONTRIBUTING.md` — Source of truth for contribution rules, metadata format, and the review process
-- `.github/workflows/ob1-review.yml` — Automated PR review
+- `.github/workflows/ob1-gate.yml` — Deterministic PR gate (folder, metadata, secrets, SQL safety, links)
+- `.github/workflows/claude-review.yml` — LLM clarity/alignment review
 - `.github/metadata.schema.json` — JSON schema for metadata.json validation
 - `.github/PULL_REQUEST_TEMPLATE.md` — PR description template
+- `server/index.ts` — Canonical MCP server reference implementation
 - `LICENSE.md` — FSL-1.1-MIT terms
 
 ## Local GSD Execution Layer
