@@ -132,6 +132,56 @@ function buildMetadata(b) {
   return meta;
 }
 
+// --- embed + upsert ------------------------------------------------------
+
+async function getEmbedding(text) {
+  const truncated = text.length > 8000 ? text.substring(0, 8000) : text;
+  const response = await fetch("https://openrouter.ai/api/v1/embeddings", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ model: EMBEDDING_MODEL, input: truncated }),
+  });
+  if (!response.ok) {
+    const msg = await response.text().catch(() => "");
+    throw new Error(`Embedding failed: ${response.status} ${msg}`);
+  }
+  const data = await response.json();
+  return data.data[0].embedding;
+}
+
+/**
+ * Direct POST /rest/v1/thoughts. Mirrors the proven obsidian-vault-import pattern.
+ * Returns "inserted" or "duplicate". `Prefer: resolution=merge-duplicates` makes
+ * duplicate fingerprints a no-op rather than a 409.
+ */
+async function upsertThought(content, metadata, embedding, createdAt, fingerprint) {
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/thoughts`, {
+    method: "POST",
+    headers: {
+      apikey: SUPABASE_SERVICE_ROLE_KEY,
+      Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+      "Content-Type": "application/json",
+      Prefer: "return=minimal,resolution=merge-duplicates",
+    },
+    body: JSON.stringify({
+      content,
+      metadata,
+      embedding,
+      created_at: createdAt,
+      content_fingerprint: fingerprint,
+    }),
+  });
+  if (response.status === 409) return "duplicate";
+  if (!response.ok) {
+    const msg = await response.text().catch(() => "");
+    throw new Error(`POST /thoughts ${response.status}: ${msg}`);
+  }
+  return "inserted";
+}
+
 // --- main ----------------------------------------------------------------
 
 async function main() {
@@ -180,11 +230,26 @@ async function main() {
       continue;
     }
 
-    // Task 4 wires the embed+upsert here.
-    console.log(`[${i + 1}/${toProcess.length}] would import "${b.tweetId}" (live import wired in Task 4)`);
+    try {
+      const embedding = await getEmbedding(content);
+      const action = await upsertThought(
+        content,
+        metadata,
+        embedding,
+        createdAt,
+        metadata.content_fingerprint
+      );
+      console.log(
+        `[${i + 1}/${toProcess.length}] ${action}: ` +
+        `@${b.authorHandle} [${metadata.primary_category || "uncat"}] ${tweetId}`
+      );
+      prepared++;
+    } catch (err) {
+      console.error(`[${i + 1}/${toProcess.length}] ERROR ${tweetId}: ${err.message}`);
+    }
   }
   console.log();
-  console.log(`Prepared: ${prepared} (dry-run)`);
+  console.log(`${dryRun ? "Prepared (dry-run)" : "Imported / updated"}: ${prepared}`);
 }
 
 main().catch((err) => { console.error("Fatal error:", err.message); process.exit(1); });
