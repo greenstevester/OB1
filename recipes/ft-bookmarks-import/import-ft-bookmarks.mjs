@@ -28,8 +28,19 @@ const args = process.argv.slice(2);
 const dryRun = args.includes("--dry-run");
 const skip = parseInt(args[args.indexOf("--skip") + 1]) || 0;
 const limit = parseInt(args[args.indexOf("--limit") + 1]) || Infinity;
-const folder = args.indexOf("--folder") !== -1 ? args[args.indexOf("--folder") + 1] : null;
-const since = args.indexOf("--since") !== -1 ? args[args.indexOf("--since") + 1] : null;
+
+function flagValue(name) {
+  const i = args.indexOf(name);
+  if (i === -1) return null;
+  const v = args[i + 1];
+  if (v === undefined || v.startsWith("--")) {
+    console.error(`${name} requires a value`);
+    process.exit(1);
+  }
+  return v;
+}
+const folder = flagValue("--folder");
+const since = flagValue("--since");
 
 if (!dryRun && (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !OPENROUTER_API_KEY)) {
   console.error("Missing required env vars: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, OPENROUTER_API_KEY");
@@ -196,8 +207,16 @@ async function main() {
   console.log(`ft returned ${bookmarks.length} bookmarks`);
 
   if (since) {
-    const cutoff = new Date(since).toISOString();
-    bookmarks = bookmarks.filter((b) => (b.syncedAt || "") >= cutoff);
+    const cutoff = new Date(since).getTime();
+    if (isNaN(cutoff)) {
+      console.error(`Invalid --since date: ${since}`);
+      process.exit(1);
+    }
+    bookmarks = bookmarks.filter((b) => {
+      if (!b.syncedAt) return false;
+      const t = new Date(b.syncedAt).getTime();
+      return !isNaN(t) && t >= cutoff;
+    });
     console.log(`After --since filter: ${bookmarks.length}`);
   }
 
@@ -206,11 +225,14 @@ async function main() {
   console.log();
 
   let prepared = 0;
+  let errors = 0;
+  let skipped = 0;
   for (let i = 0; i < toProcess.length; i++) {
     const b = toProcess[i];
     const tweetId = b.tweetId || b.id;
     if (!tweetId) {
       console.warn(`[${i + 1}/${toProcess.length}] SKIP: bookmark has no tweetId`);
+      skipped++;
       continue;
     }
     const content = buildContent(b);
@@ -246,10 +268,16 @@ async function main() {
       prepared++;
     } catch (err) {
       console.error(`[${i + 1}/${toProcess.length}] ERROR ${tweetId}: ${err.message}`);
+      errors++;
     }
   }
   console.log();
-  console.log(`${dryRun ? "Prepared (dry-run)" : "Imported / updated"}: ${prepared}`);
+  console.log(
+    `${dryRun ? "Prepared (dry-run)" : "Imported / updated"}: ${prepared}` +
+    (errors ? ` | errors: ${errors}` : "") +
+    (skipped ? ` | skipped: ${skipped}` : "")
+  );
+  if (errors > 0 && !dryRun) process.exitCode = 1;
 }
 
 main().catch((err) => { console.error("Fatal error:", err.message); process.exit(1); });

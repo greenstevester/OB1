@@ -52,4 +52,4 @@ Bookmarks are **not** included in the standard X data export, so the sibling `x-
 
 **"Failed to resolve host"** — `SUPABASE_URL` is using a hostname. Use the literal IPv4 (`100.97.178.87` for steve-stack); Node prefers IPv6 first and hangs on the AAAA path.
 
-**Re-runs writing duplicates** — Should never happen. `content_fingerprint = sha256(tweetId)` is stable; OB1's `upsert_thought` dedupes on it. If you see this, check that `metadata.content_fingerprint` is being populated correctly.
+**Re-runs writing duplicates** — Should never happen. `content_fingerprint = sha256(tweetId)` is stable; the unique partial index `idx_thoughts_fingerprint` on `thoughts.content_fingerprint` blocks duplicates, and the `Prefer: resolution=merge-duplicates` header on `POST /rest/v1/thoughts` makes the second write a 409 reported as `duplicate:` rather than an insert. If duplicates land anyway, confirm `content_fingerprint` is being set in the request body and that the unique partial index exists on the DB.
