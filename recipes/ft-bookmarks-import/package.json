@@ -1,0 +1,14 @@
+{
+  "name": "ob1-recipe-ft-bookmarks-import",
+  "version": "1.0.0",
+  "description": "Import X/Twitter bookmarks from fieldtheory-cli (ft) into Open Brain",
+  "type": "module",
+  "main": "import-ft-bookmarks.mjs",
+  "scripts": {
+    "import": "node import-ft-bookmarks.mjs",
+    "dry-run": "node import-ft-bookmarks.mjs --dry-run"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.0"
+  }
+}
