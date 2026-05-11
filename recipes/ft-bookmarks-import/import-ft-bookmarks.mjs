@@ -63,6 +63,75 @@ function runFtList() {
   });
 }
 
+// --- mapping helpers -----------------------------------------------------
+
+function contentFingerprint(tweetId) {
+  return createHash("sha256").update(String(tweetId)).digest("hex");
+}
+
+/**
+ * Twitter's postedAt is a string like "Sat May 09 14:33:29 +0000 2026".
+ * `new Date(s)` parses it correctly in V8; we just normalise to ISO.
+ * Returns null on invalid input so the caller can fall back.
+ */
+function parseTwitterDate(s) {
+  if (!s) return null;
+  const d = new Date(s);
+  if (isNaN(d.getTime())) return null;
+  return d.toISOString();
+}
+
+function resolveCreatedAt(b) {
+  return parseTwitterDate(b.postedAt)
+      || parseTwitterDate(b.bookmarkedAt)
+      || parseTwitterDate(b.syncedAt)
+      || new Date().toISOString();
+}
+
+function buildContent(b) {
+  const handle = b.authorHandle || "unknown";
+  const name = b.authorName || handle;
+  const text = b.text || "";
+  const url = b.url || "";
+  return `X bookmark by @${handle} (${name}):\n\n${text}\n\n${url}`;
+}
+
+function buildMetadata(b) {
+  const meta = {
+    source: "ft_bookmarks",
+    source_type: "x_twitter_bookmark",
+    tweet_id: b.tweetId || b.id,
+    url: b.url,
+    author_handle: b.authorHandle,
+    author_name: b.authorName,
+    posted_at: parseTwitterDate(b.postedAt),
+    bookmarked_at: parseTwitterDate(b.bookmarkedAt),
+    synced_at: b.syncedAt,
+    primary_category: b.primaryCategory ?? null,
+    primary_domain: b.primaryDomain ?? null,
+    categories: b.categories ?? [],
+    domains: b.domains ?? [],
+    folder_names: b.folderNames ?? [],
+    engagement: {
+      like_count: b.likeCount ?? null,
+      repost_count: b.repostCount ?? null,
+      reply_count: b.replyCount ?? null,
+      quote_count: b.quoteCount ?? null,
+      bookmark_count: b.bookmarkCount ?? null,
+      view_count: b.viewCount ?? null,
+    },
+    content_fingerprint: contentFingerprint(b.tweetId || b.id),
+  };
+  if (b.articleText || b.articleTitle || b.articleSite) {
+    meta.article = {
+      title: b.articleTitle ?? null,
+      site: b.articleSite ?? null,
+      text: b.articleText ?? null,
+    };
+  }
+  return meta;
+}
+
 // --- main ----------------------------------------------------------------
 
 async function main() {
@@ -86,11 +155,36 @@ async function main() {
   console.log(`Processing ${toProcess.length} (skip=${skip}, limit=${limit === Infinity ? "all" : limit})`);
   console.log();
 
-  // TODO Task 3: mapping. For now just print headers.
+  let prepared = 0;
   for (let i = 0; i < toProcess.length; i++) {
     const b = toProcess[i];
-    console.log(`[${i + 1}/${toProcess.length}] @${b.authorHandle || "?"} — ${(b.text || "").slice(0, 80).replace(/\n/g, " ")}…`);
+    const tweetId = b.tweetId || b.id;
+    if (!tweetId) {
+      console.warn(`[${i + 1}/${toProcess.length}] SKIP: bookmark has no tweetId`);
+      continue;
+    }
+    const content = buildContent(b);
+    const metadata = buildMetadata(b);
+    const createdAt = resolveCreatedAt(b);
+
+    if (dryRun) {
+      console.log(
+        `[${i + 1}/${toProcess.length}] @${b.authorHandle || "?"} ` +
+        `[${metadata.primary_category || "uncat"}/${metadata.primary_domain || "no-domain"}] ` +
+        `${content.split("\n")[0]}`
+      );
+      console.log(`    url: ${b.url}`);
+      console.log(`    fingerprint: ${metadata.content_fingerprint.slice(0, 12)}…`);
+      console.log(`    created_at: ${createdAt}`);
+      prepared++;
+      continue;
+    }
+
+    // Task 4 wires the embed+upsert here.
+    console.log(`[${i + 1}/${toProcess.length}] would import "${b.tweetId}" (live import wired in Task 4)`);
   }
+  console.log();
+  console.log(`Prepared: ${prepared} (dry-run)`);
 }
 
 main().catch((err) => { console.error("Fatal error:", err.message); process.exit(1); });
