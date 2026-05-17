@@ -67,6 +67,59 @@ Only extract what's explicitly there.`,
   }
 }
 
+// --- Markdown chunker (used by capture_note) ---
+//
+// Splits a markdown document into chunks at H1/H2 boundaries. Frontmatter
+// is stripped; fenced code blocks (```/~~~) suppress heading detection so
+// `# foo` inside a code sample is not treated as a section break. Empty
+// chunk bodies are dropped. See obsidian-open-brain/server/lib/chunker.ts
+// for the source of truth and Deno unit tests.
+
+interface Chunk {
+  heading: string | null;
+  body: string;
+}
+
+const FRONTMATTER_RE = /^---\n[\s\S]*?\n---\n/;
+const FENCE_RE = /^(```|~~~)/;
+const HEADING_RE = /^(#{1,2})\s+(.+?)\s*#*\s*$/;
+
+function chunkMarkdown(markdown: string): Chunk[] {
+  const stripped = markdown.replace(FRONTMATTER_RE, "");
+  const lines = stripped.split("\n");
+
+  const headings: Array<{ line: number; text: string }> = [];
+  let inFence = false;
+  for (let i = 0; i < lines.length; i++) {
+    if (FENCE_RE.test(lines[i])) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    const m = HEADING_RE.exec(lines[i]);
+    if (m) headings.push({ line: i, text: m[2].trim() });
+  }
+
+  if (headings.length === 0) {
+    const body = stripped.trim();
+    return body ? [{ heading: null, body }] : [];
+  }
+
+  const chunks: Chunk[] = [];
+
+  const preamble = lines.slice(0, headings[0].line).join("\n").trim();
+  if (preamble) chunks.push({ heading: null, body: preamble });
+
+  for (let i = 0; i < headings.length; i++) {
+    const start = headings[i].line + 1;
+    const end = i + 1 < headings.length ? headings[i + 1].line : lines.length;
+    const body = lines.slice(start, end).join("\n").trim();
+    if (body) chunks.push({ heading: headings[i].text, body });
+  }
+
+  return chunks;
+}
+
 // --- MCP Server Setup ---
 
 const server = new McpServer({
@@ -356,6 +409,417 @@ server.registerTool(
     } catch (err: unknown) {
       return {
         content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      };
+    }
+  }
+);
+
+// Tool 5: Delete Obsidian Note
+server.registerTool(
+  "delete_note",
+  {
+    title: "Delete Obsidian Note",
+    description:
+      "Remove all chunks of an Obsidian note from Open Brain by note_id. Called by the Obsidian plugin when a tracked note is deleted from the vault. Idempotent.",
+    inputSchema: {
+      note_id: z
+        .string()
+        .uuid()
+        .describe("UUID from the Obsidian note's open_brain_id frontmatter"),
+    },
+  },
+  async ({ note_id }) => {
+    try {
+      const { error, count } = await supabase
+        .from("thoughts")
+        .delete({ count: "exact" })
+        .eq("note_id", note_id);
+
+      if (error) {
+        return {
+          content: [
+            { type: "text" as const, text: `delete_note failed: ${error.message}` },
+          ],
+          isError: true,
+        };
+      }
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({ note_id, deleted: count ?? 0 }),
+          },
+        ],
+      };
+    } catch (err: unknown) {
+      return {
+        content: [
+          { type: "text" as const, text: `Error: ${(err as Error).message}` },
+        ],
+        isError: true,
+      };
+    }
+  }
+);
+
+// Tool 6: Count Pending Captures
+server.registerTool(
+  "count_pending_captures",
+  {
+    title: "Count Pending Captures",
+    description:
+      "Return the number of free-form captures (phone Shortcut, future webhook sources) created after the given timestamp. Used by the Obsidian plugin's indicator. Excludes note chunks and legacy Obsidian-sourced rows.",
+    inputSchema: {
+      since: z
+        .string()
+        .datetime()
+        .describe(
+          "ISO 8601 UTC timestamp. Only captures created strictly after this are counted."
+        ),
+    },
+  },
+  async ({ since }) => {
+    try {
+      const { count, error } = await supabase
+        .from("thoughts")
+        .select("*", { count: "exact", head: true })
+        .is("note_id", null)
+        .not("content", "like", "[Obsidian:%")
+        .gt("created_at", since);
+
+      if (error) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `count_pending_captures failed: ${error.message}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({ count: count ?? 0 }),
+          },
+        ],
+      };
+    } catch (err: unknown) {
+      return {
+        content: [
+          { type: "text" as const, text: `Error: ${(err as Error).message}` },
+        ],
+        isError: true,
+      };
+    }
+  }
+);
+
+// Tool 7: List Pending Captures
+server.registerTool(
+  "list_pending_captures",
+  {
+    title: "List Pending Captures",
+    description:
+      "Return free-form captures (phone Shortcut, future webhook sources) created after the given timestamp, ordered by created_at ASC. Used by the Obsidian plugin to pull new thoughts into Inbox.md. Excludes note chunks and legacy Obsidian-sourced rows.",
+    inputSchema: {
+      since: z
+        .string()
+        .datetime()
+        .describe(
+          "ISO 8601 UTC timestamp. Only captures created strictly after this are returned."
+        ),
+      limit: z
+        .number()
+        .int()
+        .positive()
+        .max(500)
+        .optional()
+        .default(100)
+        .describe("Max rows to return. Defaults to 100; capped at 500."),
+    },
+  },
+  async ({ since, limit }) => {
+    try {
+      const { data, error } = await supabase
+        .from("thoughts")
+        .select("id, content, created_at, metadata")
+        .is("note_id", null)
+        .not("content", "like", "[Obsidian:%")
+        .gt("created_at", since)
+        .order("created_at", { ascending: true })
+        .limit(limit);
+
+      if (error) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `list_pending_captures failed: ${error.message}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      const captures = data ?? [];
+      const last_created_at =
+        captures.length > 0
+          ? captures[captures.length - 1].created_at
+          : null;
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({ captures, last_created_at }),
+          },
+        ],
+      };
+    } catch (err: unknown) {
+      return {
+        content: [
+          { type: "text" as const, text: `Error: ${(err as Error).message}` },
+        ],
+        isError: true,
+      };
+    }
+  }
+);
+
+// Tool 8: Capture Obsidian Note
+server.registerTool(
+  "capture_note",
+  {
+    title: "Capture Obsidian Note",
+    description:
+      "Chunk an Obsidian note at H1/H2 boundaries and replace its rows in Open Brain. Each chunk is stored with the [Obsidian: title | path > heading] prefix, structural metadata, and an embedding. Idempotent — rerunning with the same note_id replaces the previous chunks.",
+    inputSchema: {
+      note_id: z
+        .string()
+        .uuid()
+        .describe("UUID from the Obsidian note's open_brain_id frontmatter"),
+      path: z
+        .string()
+        .describe(
+          "Directory-relative path from vault root, e.g. 'PIPELINES/3-PROJECTS'. Does not include the filename."
+        ),
+      title: z.string().describe("Filename without the .md extension"),
+      content: z
+        .string()
+        .describe(
+          "Full markdown body. Frontmatter is optional; the chunker strips it."
+        ),
+    },
+  },
+  async ({ note_id, path, title, content }) => {
+    try {
+      const { error: deleteError } = await supabase
+        .from("thoughts")
+        .delete()
+        .eq("note_id", note_id);
+      if (deleteError) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `capture_note delete phase failed: ${deleteError.message}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      const noteChunks = chunkMarkdown(content);
+      if (noteChunks.length === 0) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify({ note_id, chunks: [] }),
+            },
+          ],
+        };
+      }
+
+      const buildPrefixedContent = (heading: string | null, body: string) =>
+        heading
+          ? `[Obsidian: ${title} | ${path} > ${heading}] ${body}`
+          : `[Obsidian: ${title} | ${path}] ${body}`;
+
+      const baseRows = noteChunks.map((c, index) => ({
+        content: buildPrefixedContent(c.heading, c.body),
+        note_id,
+        chunk_index: index,
+        content_fingerprint: null,
+        metadata: {
+          source: "obsidian",
+          title,
+          path,
+          heading: c.heading,
+          chunk_index: index,
+        },
+        updated_at: new Date().toISOString(),
+      }));
+
+      const embeddings = await Promise.all(
+        baseRows.map((r) => getEmbedding(r.content))
+      );
+
+      const rows = baseRows.map((r, i) => ({
+        ...r,
+        embedding: embeddings[i],
+      }));
+
+      const { error: insertError } = await supabase
+        .from("thoughts")
+        .insert(rows);
+      if (insertError) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `capture_note insert phase failed: ${insertError.message}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({
+              note_id,
+              chunks: noteChunks.map((c, index) => ({
+                index,
+                heading: c.heading,
+              })),
+            }),
+          },
+        ],
+      };
+    } catch (err: unknown) {
+      return {
+        content: [
+          { type: "text" as const, text: `Error: ${(err as Error).message}` },
+        ],
+        isError: true,
+      };
+    }
+  }
+);
+
+// Tool 9: Rename Obsidian Note
+server.registerTool(
+  "rename_note",
+  {
+    title: "Rename Obsidian Note",
+    description:
+      "Rewrite the [Obsidian: title | path > heading] prefix on every chunk of a note when its file is renamed or moved. Heading per chunk is read from metadata.heading. content_fingerprint stays NULL; embedding is NOT recomputed (re-sync via capture_note if you need fresh embeddings).",
+    inputSchema: {
+      note_id: z.string().uuid().describe("UUID of the note to rename."),
+      new_path: z
+        .string()
+        .describe(
+          "New directory-relative path from vault root, e.g. 'PIPELINES/4-ARCHIVED'. Excludes filename."
+        ),
+      new_title: z
+        .string()
+        .describe("New filename without the .md extension."),
+    },
+  },
+  async ({ note_id, new_path, new_title }) => {
+    try {
+      const { data: rows, error: fetchError } = await supabase
+        .from("thoughts")
+        .select("id, content, metadata")
+        .eq("note_id", note_id);
+
+      if (fetchError) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `rename_note fetch phase failed: ${fetchError.message}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      if (!rows || rows.length === 0) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify({ note_id, rows_updated: 0 }),
+            },
+          ],
+        };
+      }
+
+      const PREFIX_RE = /^\[Obsidian:[^\]]*\] ?/;
+      const now = new Date().toISOString();
+
+      const updates = rows.map((row) => {
+        const meta = (row.metadata as Record<string, unknown> | null) ?? {};
+        const heading = (meta.heading as string | null | undefined) ?? null;
+        const body = row.content.replace(PREFIX_RE, "");
+        const newContent = heading
+          ? `[Obsidian: ${new_title} | ${new_path} > ${heading}] ${body}`
+          : `[Obsidian: ${new_title} | ${new_path}] ${body}`;
+        const newMetadata = {
+          ...meta,
+          title: new_title,
+          path: new_path,
+        };
+        return supabase
+          .from("thoughts")
+          .update({
+            content: newContent,
+            metadata: newMetadata,
+            updated_at: now,
+          })
+          .eq("id", row.id);
+      });
+
+      const results = await Promise.all(updates);
+      const failed = results.filter((r) => r.error);
+      if (failed.length > 0) {
+        const first = failed[0].error!.message;
+        const extra =
+          failed.length > 1 ? ` (and ${failed.length - 1} more)` : "";
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `rename_note update phase failed: ${first}${extra}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({ note_id, rows_updated: rows.length }),
+          },
+        ],
+      };
+    } catch (err: unknown) {
+      return {
+        content: [
+          { type: "text" as const, text: `Error: ${(err as Error).message}` },
+        ],
         isError: true,
       };
     }
