@@ -21,7 +21,7 @@ import os
 import re
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 try:
@@ -126,6 +126,27 @@ def _strip_non_tag_regions(text: str) -> str:
     text = _HTML_COMMENT_RE.sub('', text)
     text = _HTML_TAG_RE.sub('', text)
     return text
+
+
+def _jsonify_frontmatter(meta: dict) -> dict:
+    """Deep-copy frontmatter dict into a JSON-safe form.
+
+    YAML parsing can produce datetime.datetime / datetime.date objects
+    (from `date: 2024-05-13`-style values). Supabase's JSONB column
+    rejects these. Convert them to ISO-format strings; recurse into
+    nested dicts and lists. Leave primitives untouched.
+    """
+    def _conv(v):
+        if isinstance(v, datetime):
+            return v.isoformat()
+        if isinstance(v, date):
+            return v.isoformat()
+        if isinstance(v, list):
+            return [_conv(x) for x in v]
+        if isinstance(v, dict):
+            return {str(k): _conv(x) for k, x in v.items()}
+        return v
+    return _conv(meta)
 
 
 def iter_notes(vault_root: Path, skip_folders: set):
@@ -698,6 +719,11 @@ def main():
                     'tags': note['tags'],
                     'date': note_date,
                     'wikilinks': note['wikilinks'],
+                    # Preserve full YAML frontmatter verbatim for downstream queries.
+                    # Top-level metadata keys above remain authoritative for OB1's
+                    # standard fields (date/tags); this side-car carries everything
+                    # else (e.g. mood, location metadata, custom IDs, plugin data).
+                    'frontmatter': _jsonify_frontmatter(note['meta']),
                 },
                 'note_path': note['path'],
                 'note_hash': note['_hash'],
