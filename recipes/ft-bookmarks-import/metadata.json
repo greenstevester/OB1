@@ -1,0 +1,16 @@
+{
+  "name": "FT Bookmarks Import",
+  "description": "Import X/Twitter bookmarks from fieldtheory-cli (ft) into Open Brain as searchable thoughts with classifications preserved.",
+  "category": "recipes",
+  "version": "1.0.0",
+  "requires": {
+    "open_brain": true,
+    "services": ["OpenRouter API", "Supabase"],
+    "tools": ["Node.js 18+", "fieldtheory-cli (ft) on PATH"]
+  },
+  "tags": ["import", "twitter", "x", "bookmarks", "fieldtheory"],
+  "difficulty": "intermediate",
+  "estimated_time": "10 minutes",
+  "created": "2026-05-11",
+  "updated": "2026-05-11"
+}
