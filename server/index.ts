@@ -619,22 +619,8 @@ server.registerTool(
   },
   async ({ note_id, path, title, content }) => {
     try {
-      const { error: deleteError } = await supabase
-        .from("thoughts")
-        .delete()
-        .eq("note_id", note_id);
-      if (deleteError) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `capture_note delete phase failed: ${deleteError.message}`,
-            },
-          ],
-          isError: true,
-        };
-      }
-
+      // Chunk and embed BEFORE mutating — if embedding fails the existing rows
+      // are untouched (no silent data loss from a partial delete+insert).
       const noteChunks = chunkMarkdown(content);
       if (noteChunks.length === 0) {
         return {
@@ -675,6 +661,23 @@ server.registerTool(
         ...r,
         embedding: embeddings[i],
       }));
+
+      // Embeddings ready — now replace the stored rows atomically.
+      const { error: deleteError } = await supabase
+        .from("thoughts")
+        .delete()
+        .eq("note_id", note_id);
+      if (deleteError) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `capture_note delete phase failed: ${deleteError.message}`,
+            },
+          ],
+          isError: true,
+        };
+      }
 
       const { error: insertError } = await supabase
         .from("thoughts")
