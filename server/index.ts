@@ -851,6 +851,20 @@ app.all("*", async (c) => {
     return c.json({ error: "Invalid or missing access key" }, 401, corsHeaders);
   }
 
+  // This server is stateless: a fresh StreamableHTTPTransport is created per
+  // request (below), so it can never push server-initiated messages over the
+  // standalone GET SSE stream — handleRequest would hold a GET open forever
+  // (clients hang and time out). The MCP Streamable HTTP spec lets a server
+  // decline that stream with 405; clients treat it as "no standalone stream"
+  // and continue over POST.
+  if (c.req.method === "GET") {
+    return c.json(
+      { error: "Method Not Allowed: server-initiated SSE stream not supported" },
+      405,
+      { ...corsHeaders, Allow: "POST, OPTIONS, DELETE" }
+    );
+  }
+
   // Fix: Claude Desktop connectors don't send the Accept header that
   // StreamableHTTPTransport requires. Build a patched request if missing.
   // See: https://github.com/NateBJones-Projects/OB1/issues/33
