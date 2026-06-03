@@ -122,6 +122,16 @@ function chunkMarkdown(markdown: string): Chunk[] {
 
 // --- MCP Server Setup ---
 
+// Build a FRESH server per request (see the request handler). McpServer is
+// stateful — connect() binds it to a single transport — so a module-level
+// singleton shared across requests races under concurrency: a second request's
+// connect() rebinds the server, orphaning the first request's response. The
+// client then sees a hang or "Unexpected content type: null". A new instance per
+// request keeps each exchange isolated.
+//
+// NOTE: the tool registrations below are intentionally left at their original
+// indentation inside this function to keep the fix diff small and reviewable.
+function createServer() {
 const server = new McpServer({
   name: "open-brain",
   version: "1.0.0",
@@ -829,6 +839,9 @@ server.registerTool(
   }
 );
 
+  return server;
+}
+
 // --- Hono App with Auth + CORS ---
 
 const corsHeaders = {
@@ -881,6 +894,7 @@ app.all("*", async (c) => {
     Object.defineProperty(c.req, "raw", { value: patched, writable: true });
   }
 
+  const server = createServer();
   const transport = new StreamableHTTPTransport();
   await server.connect(transport);
   return transport.handleRequest(c);
