@@ -1,6 +1,8 @@
 # CLAUDE.md — Agent Instructions for Open Brain
 
 > **Product vision:** see [`./PRD.md`](./PRD.md) — the shared OpenBrain PRD (identical across all OpenBrain repos).
+>
+> **Backend E2E:** run `/run-e2e-tests` — dev smoke (all 9 MCP tools, write→read→search→delete) against the isolated `thoughts_dev` brain via merkheap-mcp `:9300`. Safe & repeatable; defined in `.claude/commands/run-e2e-tests.md` (shared across all OpenBrain repos).
 
 This file helps AI coding tools (Claude Code, Codex, Cursor, etc.) work effectively in this repo.
 
