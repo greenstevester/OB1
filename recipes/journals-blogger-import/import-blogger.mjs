@@ -137,21 +137,35 @@ async function getEmbedding(text) {
 }
 
 async function upsertThought(content, metadata, embedding, createdAt) {
+  // upsert_thought persists ONLY (content, content_fingerprint, metadata) and
+  // returns { id, fingerprint }. So the thought's semantic tags must live INSIDE
+  // metadata (type/importance/etc. are not columns), and the embedding + original
+  // timestamp have to be written to the row directly afterwards — otherwise the
+  // row lands with a NULL embedding (unsearchable) and a now() created_at.
   const { data, error } = await supabase.rpc("upsert_thought", {
     p_content: content,
     p_payload: {
-      type: "journal",
-      source_type: "blogger_import",
-      importance: 3,
-      quality_score: 60,
-      sensitivity_tier: "standard",
-      metadata: { ...metadata, source: "blogger_import", source_type: "blogger_import" },
-      embedding: JSON.stringify(embedding),
-      created_at: createdAt,
+      metadata: {
+        ...metadata,
+        source: "blogger_import",
+        source_type: "blogger_import",
+        type: "journal",
+        importance: 3,
+        quality_score: 60,
+        sensitivity_tier: "standard",
+      },
     },
   });
   if (error) throw new Error(`upsert_thought failed: ${error.message}`);
-  return data;
+  const id = data?.id;
+  if (!id) throw new Error("upsert_thought returned no id");
+  // embedding as a raw number[] (pgvector accepts the JSON array form).
+  const { error: updateError } = await supabase
+    .from("thoughts")
+    .update({ embedding, created_at: createdAt })
+    .eq("id", id);
+  if (updateError) throw new Error(`embedding/created_at update failed: ${updateError.message}`);
+  return id;
 }
 
 async function main() {
@@ -208,7 +222,7 @@ async function main() {
         embedding,
         createdAt
       );
-      console.log(`[${i + 1}/${toProcess.length}] ${result.action}: #${result.thought_id} "${title}"`);
+      console.log(`[${i + 1}/${toProcess.length}] imported ${result} "${title}"`);
       imported++;
     } catch (err) {
       console.error(`[${i + 1}/${toProcess.length}] Error: ${err.message}`);
