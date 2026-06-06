@@ -1,5 +1,7 @@
 # CLAUDE.md — Agent Instructions for Open Brain
 
+> **Product vision:** see [`./PRD.md`](./PRD.md) — the shared OpenBrain PRD (identical across all OpenBrain repos).
+
 This file helps AI coding tools (Claude Code, Codex, Cursor, etc.) work effectively in this repo.
 
 ## What This Repo Is
