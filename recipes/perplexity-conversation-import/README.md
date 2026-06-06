@@ -26,7 +26,7 @@ Deduplication via a sync log ensures safe re-runs without duplicates.
 - Working Open Brain setup ([getting started guide](../../docs/01-getting-started.md))
 - Perplexity data export (`.xlsx` file)
 - Python 3.10+
-- OpenRouter API key (for embeddings + conversation summarization)
+- OpenRouter API key (for conversation summarization; embeddings now use self-hosted TEI)
 
 ## Step-by-Step
 
@@ -59,7 +59,11 @@ Get your Supabase Secret Key from the dashboard: **Settings → API → Secret k
 ```bash
 export SUPABASE_URL="https://your-project.supabase.co"
 export SUPABASE_SERVICE_ROLE_KEY="sb_secret_..."  # Your Secret Key
-export OPENROUTER_API_KEY="sk-or-v1-your-key"
+export OPENROUTER_API_KEY="sk-or-v1-your-key"      # Conversation summarization (not embeddings)
+
+# Optional — embeddings via self-hosted TEI (no API key). Defaults shown:
+export EMBED_BASE_URL="http://mac-mini-bruce:8080/v1"  # use http://localhost:8080/v1 on the mini
+export EMBED_MODEL="BAAI/bge-small-en-v1.5"
 ```
 
 Or copy `.env.example` to `.env` and fill in the values, then:
@@ -148,7 +152,7 @@ Summary:
 - Memory entries skip this stage — they're already concise summaries from Perplexity
 
 **Stage 3: Ingest**
-- Generates a 1536-dim embedding per thought (text-embedding-3-small via OpenRouter)
+- Generates a 384-dim embedding per thought (BAAI/bge-small-en-v1.5 via self-hosted TEI)
 - Inserts into the `thoughts` table via Supabase REST API
 - Attaches metadata: source, title/date/UUID (conversations), memory key/confidence (memory)
 - Preserves original timestamps — the `created_at` column is set to the Perplexity export's `CREATED` or `FIRST_CREATED_AT`, not "now"
@@ -204,7 +208,7 @@ These are automatically detected and flattened into separate thoughts:
 
 ## Local LLM Option
 
-Use Ollama for free, private summarization (embeddings still require OpenRouter):
+Use Ollama for free, private summarization (embeddings use self-hosted TEI):
 
 ```bash
 python import-perplexity.py export.xlsx --model ollama --ollama-model qwen3
@@ -215,7 +219,7 @@ python import-perplexity.py export.xlsx --model ollama --ollama-model qwen3
 | Component | Cost per item | Notes |
 |-----------|--------------|-------|
 | Summarization | ~$0.0003 | gpt-4o-mini via OpenRouter, conversations only |
-| Embeddings | ~$0.000002 | text-embedding-3-small, all thoughts |
+| Embeddings | $0 (local) | bge-small-en-v1.5, self-hosted TEI |
 
 For a typical export with 100 conversations and 50 memory entries, total cost is under $0.04.
 
@@ -236,19 +240,18 @@ Your export may use different sheet names. Open the file in a spreadsheet app an
 export OPENROUTER_API_KEY="sk-or-v1-your-key"
 ```
 
-Or use `--model ollama` for local summarization (embeddings still need OpenRouter).
+Or use `--model ollama` for local summarization (embeddings use self-hosted TEI).
 
 **Summarization returns empty thoughts**
 Some Q&A pairs are too simple (e.g., "what time is it?"). This is expected — the LLM is designed to be selective. Try `--verbose` to see what's being skipped.
 
 **"Failed to generate embedding"**
-Check your OpenRouter API key has credits and access to `text-embedding-3-small`. Test with:
+Check the self-hosted TEI server is reachable and serving the model. Test with:
 
 ```bash
-curl https://openrouter.ai/api/v1/embeddings \
-  -H "Authorization: Bearer $OPENROUTER_API_KEY" \
+curl http://mac-mini-bruce:8080/v1/embeddings \
   -H "Content-Type: application/json" \
-  -d '{"model":"openai/text-embedding-3-small","input":"test"}'
+  -d '{"model":"BAAI/bge-small-en-v1.5","input":"test"}'
 ```
 
 **Re-running imports**

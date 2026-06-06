@@ -62,9 +62,12 @@ except ImportError:
 # -- Config ------------------------------------------------------------------
 
 READWISE_BASE = "https://readwise.io/api/v2"
-OPENROUTER_BASE = "https://openrouter.ai/api/v1"
-EMBEDDING_MODEL = "openai/text-embedding-3-small"
-EMBEDDING_BATCH_SIZE = 100           # OpenRouter API calls; throughput-bound, safe to be large
+# Embeddings: self-hosted TEI (BAAI/bge-small-en-v1.5, 384-d) via its
+# OpenAI-compatible /v1/embeddings endpoint. Content is embedded as a passage
+# (no query prefix).
+EMBED_BASE_URL = os.environ.get("EMBED_BASE_URL", "http://mac-mini-bruce:8080/v1")
+EMBED_MODEL = os.environ.get("EMBED_MODEL", "BAAI/bge-small-en-v1.5")
+EMBEDDING_BATCH_SIZE = 32             # TEI default --max-client-batch-size is 32
 INSERT_BATCH_SIZE = 25               # Supabase inserts; bound by pgvector index maintenance cost
 READWISE_PAGE_SIZE = 1000            # Export endpoint max
 PROGRESS_EVERY = 500                 # Print a heartbeat every N highlights
@@ -135,15 +138,12 @@ def fetch_export_page(
 # -- Embeddings --------------------------------------------------------------
 
 
-def embed_batch(api_key: str, texts: list[str]) -> list[list[float]]:
-    """Embed up to 2048 strings in a single OpenRouter call."""
+def embed_batch(texts: list[str]) -> list[list[float]]:
+    """Embed up to 32 passages (TEI's max client batch) in a single call."""
     r = requests.post(
-        f"{OPENROUTER_BASE}/embeddings",
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        json={"model": EMBEDDING_MODEL, "input": texts},
+        f"{EMBED_BASE_URL}/embeddings",
+        headers={"Content-Type": "application/json"},
+        json={"model": EMBED_MODEL, "input": texts},
         timeout=120,
     )
     r.raise_for_status()
@@ -413,12 +413,11 @@ def main() -> None:
     try:
         supabase_url = os.environ["SUPABASE_URL"]
         service_key = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
-        openrouter_key = os.environ["OPENROUTER_API_KEY"]
     except KeyError as e:
         print(f"Missing required env var: {e.args[0]}")
         print(
             "Set READWISE_ACCESS_TOKEN, SUPABASE_URL, "
-            "SUPABASE_SERVICE_ROLE_KEY, and OPENROUTER_API_KEY."
+            "and SUPABASE_SERVICE_ROLE_KEY."
         )
         sys.exit(1)
 
@@ -499,7 +498,7 @@ def main() -> None:
                 texts = [t["content"] for t in thoughts]
 
                 if not args.dry_run:
-                    embeddings = embed_batch(openrouter_key, texts)
+                    embeddings = embed_batch(texts)
                     for thought, emb in zip(thoughts, embeddings):
                         thought["embedding"] = emb
                     # Split into smaller insert batches so each Supabase

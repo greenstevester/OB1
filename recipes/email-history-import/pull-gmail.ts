@@ -44,6 +44,11 @@ const INGEST_URL = Deno.env.get("INGEST_URL") || "";
 const INGEST_KEY = Deno.env.get("INGEST_KEY") || "";
 
 const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
+// Embeddings come from self-hosted TEI (BAAI/bge-small-en-v1.5, 384-d) via its
+// OpenAI-compatible /v1/embeddings endpoint; OpenRouter above is still used for
+// LLM metadata extraction. Content is embedded as a passage (no query prefix).
+const EMBED_BASE_URL = Deno.env.get("EMBED_BASE_URL") || "http://mac-mini-bruce:8080/v1";
+const EMBED_MODEL = Deno.env.get("EMBED_MODEL") || "BAAI/bge-small-en-v1.5";
 
 // ─── Sync Log (deduplication) ────────────────────────────────────────────────
 
@@ -584,14 +589,11 @@ function processEmail(msg: GmailMessage): ProcessedEmail | null {
 
 async function getEmbedding(text: string): Promise<number[]> {
   const truncated = text.slice(0, 8000);
-  const res = await fetch(`${OPENROUTER_BASE}/embeddings`, {
+  const res = await fetch(`${EMBED_BASE_URL}/embeddings`, {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-      "Content-Type": "application/json",
-    },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: "openai/text-embedding-3-small",
+      model: EMBED_MODEL,
       input: truncated,
     }),
   });

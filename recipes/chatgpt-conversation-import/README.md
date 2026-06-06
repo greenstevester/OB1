@@ -12,7 +12,7 @@ Takes your ChatGPT data export, resolves conversation branches, dispatches acros
 - Your ChatGPT data export (Settings → Data Controls → Export Data in ChatGPT)
 - Python 3.10+
 - Your Supabase project URL and service role key (from your credential tracker)
-- OpenRouter API key (for LLM extraction and embedding generation)
+- OpenRouter API key (for LLM extraction/summarization; embeddings now use self-hosted TEI)
 
 ## Credential Tracker
 
@@ -100,7 +100,7 @@ On Windows, the importer reads export JSON files as UTF-8 explicitly, so convers
 Open your Supabase dashboard → Table Editor → `thoughts`. You should see new rows with:
 - `content`: prefixed with `[ChatGPT: title | date]`, followed by a self-contained thought statement
 - `metadata`: includes `source: "chatgpt"`, thought `type`, `topics`, `people`, `confidence`, model, conversation URL, and more
-- `embedding`: a 1536-dimension vector (generated from the thought content, not the prefix)
+- `embedding`: a 384-dimension vector (generated from the thought content as a passage)
 
 ### 8. Test a search
 
@@ -180,7 +180,7 @@ The LLM is instructed to:
 - Preserve personal context that looks ephemeral but encodes life situation
 - Return empty for conversations that are just generic Q&A, creative tasks, or ephemeral lookups
 
-**Stage 3: Ingestion** — Each thought gets a vector embedding (text-embedding-3-small, 1536 dimensions) generated from the thought content itself (not the `[ChatGPT: title]` prefix). Before insertion, semantic deduplication checks for near-duplicates using `match_thoughts` RPC at a 0.92 similarity threshold. Each thought is inserted into your `thoughts` table with enriched metadata including model, conversation type, voice, and confidence.
+**Stage 3: Ingestion** — Each thought gets a vector embedding (BAAI/bge-small-en-v1.5, 384 dimensions, self-hosted TEI) generated from the thought content itself (not the `[ChatGPT: title]` prefix). Before insertion, semantic deduplication checks for near-duplicates using `match_thoughts` RPC at a 0.92 similarity threshold (the dedup probe is embedded as a passage too). Each thought is inserted into your `thoughts` table with enriched metadata including model, conversation type, voice, and confidence.
 
 ### Deduplication
 
@@ -294,7 +294,7 @@ ollama pull qwen3
 python import-chatgpt.py export.zip --model ollama --ollama-model qwen3
 ```
 
-Note: embeddings still use OpenRouter (text-embedding-3-small) for Supabase direct insert mode. Only the extraction step runs locally.
+Note: embeddings use self-hosted TEI (BAAI/bge-small-en-v1.5) for Supabase direct insert mode. Only the extraction step runs locally.
 
 ## Cost Estimates
 
@@ -303,7 +303,7 @@ All costs are via OpenRouter at current pricing. The v2 pipeline sends full dial
 | Component | Model | Cost |
 |-----------|-------|------|
 | Knowledge extraction | gpt-4o-mini | ~$0.15/1M input + $0.60/1M output |
-| Embeddings | text-embedding-3-small | ~$0.02/1M tokens |
+| Embeddings | bge-small-en-v1.5 (self-hosted TEI) | $0 (local) |
 
 **Typical costs by export size (~$0.001/conversation):**
 
@@ -314,7 +314,7 @@ All costs are via OpenRouter at current pricing. The v2 pipeline sends full dial
 | 1000 conversations | ~600 | ~1,800 | ~$0.60 |
 | 5000 conversations | ~3,000 | ~9,000 | ~$3.00 |
 
-These assume ~40% of conversations are filtered as trivial and ~3 thoughts per conversation. Add `--store-conversations` for ~$0.00004 extra per conversation (pyramid summaries in the same LLM call). Use `--model ollama` for $0 extraction cost (embeddings still use OpenRouter).
+These assume ~40% of conversations are filtered as trivial and ~3 thoughts per conversation. Add `--store-conversations` for ~$0.00004 extra per conversation (pyramid summaries in the same LLM call). Use `--model ollama` for $0 extraction cost (embeddings use self-hosted TEI).
 
 ## Troubleshooting
 
@@ -340,7 +340,7 @@ Solution: Conversations with fewer than 2 messages (single-turn) are always filt
 Solution: Just run the script again pointing at your new export. The sync log (`chatgpt-sync-log.json`) next to `import-chatgpt.py` tracks which conversations have been processed and their `update_time`. Only new conversations and conversations with new messages will be re-processed. If you want to start fresh, delete that file.
 
 **Issue: `Failed to generate embedding` errors**
-Solution: Check that your OpenRouter API key is valid and has credits. Go to openrouter.ai/credits to verify your balance. The embedding model (text-embedding-3-small) costs $0.02 per million tokens — even a large import costs pennies.
+Solution: Embeddings are now generated locally and for free via self-hosted TEI — there's no per-token cost. If embeddings fail, check that `EMBED_BASE_URL` is reachable (default `http://mac-mini-bruce:8080/v1`). The OpenRouter API key only needs credits for extraction/summarization — go to openrouter.ai/credits to verify that balance.
 
 **Issue: How to use `--store-conversations`**
 Solution: You need to create the `chatgpt_conversations` table first. Open the Supabase SQL Editor, paste the contents of `schema.sql` from this recipe folder, and run it. Then pass `--store-conversations` on your next import run. The table stores conversation-level summaries and metadata — it is optional and the core thought import works without it.

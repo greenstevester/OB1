@@ -27,6 +27,11 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || "";
 
 const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
+// Embeddings come from self-hosted TEI (BAAI/bge-small-en-v1.5, 384-d) via its
+// OpenAI-compatible /v1/embeddings endpoint; OpenRouter above is still used for
+// LLM summarization. Content is embedded as a passage (no query prefix).
+const EMBED_BASE_URL = process.env.EMBED_BASE_URL || "http://mac-mini-bruce:8080/v1";
+const EMBED_MODEL = process.env.EMBED_MODEL || "BAAI/bge-small-en-v1.5";
 const SYNC_LOG_PATH = "google-activity-sync-log.json";
 
 // Categories worth importing (skip low-signal ones like Ads, Assistant, etc.)
@@ -315,13 +320,10 @@ async function generateEmbedding(text) {
   const truncated = text.slice(0, 8000);
 
   const resp = await httpPost(
-    `${OPENROUTER_BASE}/embeddings`,
+    `${EMBED_BASE_URL}/embeddings`,
+    { "Content-Type": "application/json" },
     {
-      "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    {
-      model: "openai/text-embedding-3-small",
+      model: EMBED_MODEL,
       input: truncated,
     }
   );

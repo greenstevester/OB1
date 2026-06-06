@@ -6,7 +6,7 @@ Your email is full of decisions, commitments, and context that your AI has never
 
 ## What It Does
 
-Pulls your Gmail history via the Gmail API and loads each email into Open Brain as a single thought. The script generates embeddings and extracts metadata (topics, people, action items) locally via OpenRouter, then inserts directly into Supabase with SHA-256 content fingerprint dedup.
+Pulls your Gmail history via the Gmail API and loads each email into Open Brain as a single thought. The script generates embeddings via self-hosted TEI (bge-small, 384-d) and extracts metadata (topics, people, action items) via OpenRouter, then inserts directly into Supabase with SHA-256 content fingerprint dedup.
 
 **One email = one thought.** No chunking, no parent/child relationships. This aligns with how the OB1 community handles long content (truncate for embedding, store full content).
 
@@ -16,7 +16,7 @@ Pulls your Gmail history via the Gmail API and loads each email into Open Brain 
 - Deno runtime installed
 - Google Cloud project with Gmail API enabled
 - Gmail API OAuth credentials (Client ID + Client Secret)
-- OpenRouter API key (same one from your Open Brain setup)
+- OpenRouter API key (same one from your Open Brain setup) — used for metadata extraction only, not embeddings
 
 ## Credential Tracker
 
@@ -48,7 +48,9 @@ GENERATED DURING SETUP
    ```bash
    export SUPABASE_URL=https://YOUR_REF.supabase.co
    export SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
-   export OPENROUTER_API_KEY=sk-or-v1-your-key
+   export OPENROUTER_API_KEY=sk-or-v1-your-key   # metadata extraction only
+   # Optional — defaults to the self-hosted TEI endpoint; only set to override:
+   # EMBED_BASE_URL=http://mac-mini-bruce:8080/v1
    ```
 
 4. **First run — authenticate:**
@@ -88,7 +90,7 @@ deno run --allow-net --allow-read --allow-write --allow-env pull-gmail.ts --list
 
 ### Ingestion modes
 
-**Default (Supabase direct insert)** — The script generates embeddings and extracts metadata via OpenRouter, then inserts directly into Supabase with content fingerprint dedup. Requires `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `OPENROUTER_API_KEY`. This matches the pattern used by the ChatGPT import and MCP server.
+**Default (Supabase direct insert)** — The script generates embeddings via self-hosted TEI (bge-small, 384-d) and extracts metadata via OpenRouter, then inserts directly into Supabase with content fingerprint dedup. Requires `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and `OPENROUTER_API_KEY` (still required, for metadata extraction); optionally set `EMBED_BASE_URL` to override the default TEI endpoint. This matches the pattern used by the ChatGPT import and MCP server.
 
 **`--ingest-endpoint`** — POSTs to a custom Edge Function endpoint that handles embedding and metadata server-side. Requires `INGEST_URL` and `INGEST_KEY`. Use this if you have a custom ingest-thought function deployed.
 
@@ -98,7 +100,7 @@ deno run --allow-net --allow-read --allow-write --allow-env pull-gmail.ts --list
 2. **Extract** body (base64 decode, HTML-to-text, strip quoted replies and signatures)
 3. **Filter** out noise (no-reply senders, receipts, auto-generated, <10 words)
 4. **Deduplicate** via sync-log (tracks Gmail message IDs already imported)
-5. **Embed** content via OpenRouter (`text-embedding-3-small`)
+5. **Embed** content via self-hosted TEI (`BAAI/bge-small-en-v1.5`)
 6. **Classify** via LLM (topics, type, people, action items)
 7. **Upsert** into Supabase with SHA-256 [content fingerprint](../../primitives/content-fingerprint-dedup/README.md) — re-running produces zero duplicates
 
@@ -113,7 +115,7 @@ deno run --allow-net --allow-read --allow-write --allow-env pull-gmail.ts --list
 
 Each imported email becomes one row in the `thoughts` table:
 - `content`: Email body with context prefix (`[Email from X | Subject: Y | Date: Z]`)
-- `embedding`: 1536-dim vector for semantic search (truncated to 8K chars)
+- `embedding`: 384-dim vector for semantic search (truncated to 8K chars)
 - `metadata`: LLM-extracted topics, type, people, action items, plus `source: "gmail"`, `gmail_id`, `gmail_labels`, `gmail_thread_id`
 - `content_fingerprint`: Normalized SHA-256 hash for dedup (see [content fingerprint primitive](../../primitives/content-fingerprint-dedup/README.md))
 
@@ -125,4 +127,4 @@ Each imported email becomes one row in the `thoughts` table:
 
 **Re-running imports the same emails:** The `sync-log.json` file tracks imported Gmail IDs. Delete it to re-import everything. Content fingerprints provide a second layer of dedup at the database level.
 
-**Embedding/metadata errors:** Verify your `OPENROUTER_API_KEY` has credits. The script calls OpenRouter for both embedding generation and metadata extraction.
+**Embedding/metadata errors:** OpenRouter is now used for metadata extraction only — verify your `OPENROUTER_API_KEY` has credits if metadata fails. Embeddings hit the local TEI endpoint, so if embeddings fail, check that `EMBED_BASE_URL` is reachable.

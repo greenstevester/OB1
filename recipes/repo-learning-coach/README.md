@@ -13,7 +13,7 @@ Unlike an OB1 extension, this stays a local app in v1. It uses your existing Ope
 - Working Open Brain setup ([guide](../../docs/01-getting-started.md))
 - Node.js 18+ and `npm`
 - Supabase project URL and service role key from your existing Open Brain setup
-- OpenRouter API key for related-thought retrieval and durable capture into `thoughts`
+- `EMBED_BASE_URL` for an embedder (self-hosted TEI, no key) — powers related-thought retrieval and durable capture into `thoughts`
 
 ## Credential Tracker
 
@@ -26,7 +26,7 @@ REPO LEARNING COACH -- CREDENTIAL TRACKER
 FROM YOUR OPEN BRAIN SETUP
   Supabase Project URL:        ____________
   Supabase Service Role Key:   ____________
-  OpenRouter API Key:          ____________
+  EMBED_BASE_URL (default: http://mac-mini-bruce:8080/v1, self-hosted TEI, no key): ____________
 
 LOCAL APP
   Recipe folder path:          ____________
@@ -85,8 +85,8 @@ cp .env.example .env
 ```text
 SUPABASE_URL=https://your-project-ref.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
-OPENROUTER_API_KEY=your-openrouter-key
-OPENROUTER_EMBEDDING_MODEL=openai/text-embedding-3-small
+EMBED_BASE_URL=http://mac-mini-bruce:8080/v1
+EMBED_MODEL=BAAI/bge-small-en-v1.5
 PORT=8787
 ```
 
@@ -219,7 +219,7 @@ Open a lesson and use the **Open Brain capture** panel to save one of three arti
 - `Confusion note` — something worth resurfacing later
 - `Lesson summary` — a reusable summary for future work
 
-The lesson view also shows **Related thoughts** pulled from your existing `thoughts` table when OpenRouter retrieval is configured.
+The lesson view also shows **Related thoughts** pulled from your existing `thoughts` table when `EMBED_BASE_URL` is configured.
 
 > [!TIP]
 > Keep this bridge narrow. Capture durable artifacts, not every note or every quiz result.
@@ -252,7 +252,7 @@ That way the frontend can move without redesigning the learning schema.
 Solution: Run the full contents of [schema.sql](./schema.sql) in Supabase first. The app assumes the `repo_learning_*` tables already exist.
 
 **Issue: The app loads, but “Related thoughts” stays empty**  
-Solution: Check `OPENROUTER_API_KEY` in `.env`. The bridge needs embeddings to query `match_thoughts`. Also make sure your Open Brain already has useful content in `thoughts`.
+Solution: Check `EMBED_BASE_URL` in `.env` (the bridge turns on when it's set; self-hosted TEI needs no key). The bridge needs embeddings to query `match_thoughts`. Also make sure your Open Brain already has useful content in `thoughts`.
 
 **Issue: “Send to Open Brain” fails**  
 Solution: Confirm your OB1 project includes the usual `upsert_thought` flow from the core setup and that your service role key is correct. This recipe writes through that existing path; it does not define its own capture RPC.

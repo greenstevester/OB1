@@ -69,6 +69,11 @@ SYNC_LOG_PATH = SCRIPT_DIR / "chatgpt-sync-log.json"
 
 OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 OLLAMA_BASE = "http://localhost:11434"
+# Embeddings come from self-hosted TEI (BAAI/bge-small-en-v1.5, 384-d) via its
+# OpenAI-compatible /v1/embeddings endpoint; OpenRouter is still used for LLM
+# summarization. Content (and the dedup probe) is embedded as a passage (no prefix).
+EMBED_BASE_URL = os.environ.get("EMBED_BASE_URL", "http://mac-mini-bruce:8080/v1")
+EMBED_MODEL = os.environ.get("EMBED_MODEL", "BAAI/bge-small-en-v1.5")
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
@@ -461,17 +466,14 @@ def summarize(title, date_str, dialogue_text, message_count, model_slug, args):
 
 
 def generate_embedding(text):
-    """Generate a 1536-dim embedding via OpenRouter (text-embedding-3-small)."""
+    """Generate a 384-dim passage embedding via self-hosted TEI (bge-small)."""
     truncated = text[:8000]
 
     resp = http_post_with_retry(
-        f"{OPENROUTER_BASE}/embeddings",
-        headers={
-            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-            "Content-Type": "application/json",
-        },
+        f"{EMBED_BASE_URL}/embeddings",
+        headers={"Content-Type": "application/json"},
         body={
-            "model": "openai/text-embedding-3-small",
+            "model": EMBED_MODEL,
             "input": truncated,
         },
     )

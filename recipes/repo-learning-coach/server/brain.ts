@@ -33,15 +33,13 @@ type CaptureArtifactInput = {
   }
 }
 
-const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1'
-
 export const getBrainBridgeState = (): BrainBridgeState =>
-  APP_ENV.openrouterApiKey
+  APP_ENV.embedBaseUrl
     ? { enabled: true, reason: null }
     : {
         enabled: false,
         reason:
-          'Set OPENROUTER_API_KEY to enable related-thought retrieval and capture into thoughts.',
+          'Set EMBED_BASE_URL (e.g. http://mac-mini-bruce:8080/v1 for self-hosted TEI) to enable related-thought retrieval and capture into thoughts.',
       }
 
 const ensureBrainBridge = () => {
@@ -52,17 +50,22 @@ const ensureBrainBridge = () => {
   }
 }
 
+// Embeds `text` verbatim via the configured embedder (self-hosted TEI by
+// default, bge-small 384-d, OpenAI-compatible /v1/embeddings). Search callers
+// add the bge query prefix; capture passes its content unprefixed.
 const getEmbedding = async (text: string): Promise<number[]> => {
   ensureBrainBridge()
 
-  const response = await fetch(`${OPENROUTER_BASE_URL}/embeddings`, {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (APP_ENV.embedApiKey) {
+    headers.Authorization = `Bearer ${APP_ENV.embedApiKey}`
+  }
+
+  const response = await fetch(`${APP_ENV.embedBaseUrl}/embeddings`, {
     method: 'POST',
-    headers: {
-      Authorization: `Bearer ${APP_ENV.openrouterApiKey}`,
-      'Content-Type': 'application/json',
-    },
+    headers,
     body: JSON.stringify({
-      model: APP_ENV.openrouterEmbeddingModel,
+      model: APP_ENV.embedModel,
       input: text,
     }),
   })
@@ -70,7 +73,7 @@ const getEmbedding = async (text: string): Promise<number[]> => {
   if (!response.ok) {
     const errorText = await response.text().catch(() => '')
     throw new Error(
-      `OpenRouter embeddings failed: ${response.status} ${errorText}`.trim(),
+      `Embedding request failed: ${response.status} ${errorText}`.trim(),
     )
   }
 
@@ -81,7 +84,7 @@ const getEmbedding = async (text: string): Promise<number[]> => {
   const embedding = payload.data?.[0]?.embedding
 
   if (!embedding) {
-    throw new Error('OpenRouter did not return an embedding vector.')
+    throw new Error('Embedder did not return an embedding vector.')
   }
 
   return embedding
@@ -143,8 +146,10 @@ export const findRelatedThoughtsForLesson = async (
     return []
   }
 
+  // bge is asymmetric: prepend the search instruction for queries; stored
+  // passages (captured artifacts) are embedded without it.
   const queryEmbedding = await getEmbedding(
-    buildSearchQuery(lesson, relatedResearchTitles),
+    `${APP_ENV.embedQueryPrefix}${buildSearchQuery(lesson, relatedResearchTitles)}`,
   )
 
   const { data, error } = await supabase.rpc('match_thoughts', {

@@ -27,11 +27,14 @@ config();
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
-const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL || "openai/text-embedding-3-small";
+// Self-hosted TEI (BAAI/bge-small-en-v1.5, 384-d) via its OpenAI-compatible
+// /v1/embeddings endpoint. Captured content is embedded as a passage (no query
+// prefix) to match the merkheap/edge-fn convention against the vector(384) schema.
+const EMBED_BASE_URL = process.env.EMBED_BASE_URL || "http://mac-mini-bruce:8080/v1";
+const EMBED_MODEL = process.env.EMBED_MODEL || "BAAI/bge-small-en-v1.5";
 
-if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !OPENROUTER_API_KEY) {
-  console.error("Missing required env vars: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, OPENROUTER_API_KEY");
+if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+  console.error("Missing required env vars: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY");
   process.exit(1);
 }
 
@@ -76,13 +79,10 @@ async function findDataDir(dir) {
 
 async function getEmbedding(text) {
   const truncated = text.length > 8000 ? text.substring(0, 8000) : text;
-  const response = await fetch("https://openrouter.ai/api/v1/embeddings", {
+  const response = await fetch(`${EMBED_BASE_URL}/embeddings`, {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ model: EMBEDDING_MODEL, input: truncated }),
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model: EMBED_MODEL, input: truncated }),
   });
   if (!response.ok) {
     const msg = await response.text().catch(() => "");

@@ -22,7 +22,7 @@ Takes your Google Takeout data export, filters out noise (passive visits, trivia
 - Your Google Takeout data export (see Step 1 below)
 - Node.js 18+
 - Your Supabase project URL and service role key (from your credential tracker)
-- OpenRouter API key (for LLM summarization and embedding generation)
+- OpenRouter API key (for LLM day-summarization; embeddings now use self-hosted TEI)
 
 ## Credential Tracker
 
@@ -123,7 +123,7 @@ Progress prints to the console. A sync log (`google-activity-sync-log.json`) tra
 Open your Supabase dashboard → Table Editor → `thoughts`. You should see new rows with:
 - `content`: prefixed with `[Google Search: 2024-06-15]` (or Gmail, Maps, etc.)
 - `metadata`: includes `source: "google_activity"`, category, date, entry count
-- `embedding`: a 1536-dimension vector
+- `embedding`: a 384-dimension vector
 
 ### 7. Test a search
 
@@ -165,7 +165,7 @@ The filtering is aggressive by design — most Google activity is noise. The scr
 
 **Stage 2: Day grouping & summarization** — Surviving entries are grouped by date. Each day goes to an LLM (gpt-4o-mini via OpenRouter) with a tuned prompt. The LLM extracts 1-3 standalone thoughts per day, focusing on research patterns, decisions, and interests. Days with only trivial activity get empty summaries.
 
-**Stage 3: Ingestion** — Each thought gets a vector embedding (text-embedding-3-small, 1536 dimensions) and is inserted into your `thoughts` table with metadata linking back to the source category and date.
+**Stage 3: Ingestion** — Each thought gets a vector embedding (BAAI/bge-small-en-v1.5, 384 dimensions, self-hosted TEI) and is inserted into your `thoughts` table with metadata linking back to the source category and date.
 
 ### Deduplication
 
@@ -205,7 +205,7 @@ If you don't want to send your activity data to OpenRouter for summarization, us
 node import-google-activity.mjs ./Takeout/My\ Activity --raw
 ```
 
-This inserts the grouped daily entries as-is (e.g., "Google Search activity for 2024-06-15: Searched for X, Searched for Y..."). Embeddings still use OpenRouter. The thoughts won't be as clean, but your raw activity data stays private.
+This inserts the grouped daily entries as-is (e.g., "Google Search activity for 2024-06-15: Searched for X, Searched for Y..."). Embeddings use self-hosted TEI (local). The thoughts won't be as clean, but your raw activity data stays private.
 
 ## Cost Estimates
 
@@ -214,7 +214,7 @@ All costs are via OpenRouter at current pricing.
 | Component | Model | Cost |
 |-----------|-------|------|
 | Summarization | gpt-4o-mini | ~$0.15/1M input + $0.60/1M output |
-| Embeddings | text-embedding-3-small | ~$0.02/1M tokens |
+| Embeddings | bge-small-en-v1.5 (self-hosted TEI) | $0 (local) |
 
 **Typical costs by Takeout size:**
 
@@ -245,7 +245,7 @@ Solution: This is expected. The LLM is deliberately selective — days with only
 Solution: Just run the script again pointing at your new export. The sync log tracks which days have been processed by content hash. Only new or changed days will be imported. If you want to start completely fresh, delete `google-activity-sync-log.json`.
 
 **Issue: `Failed to generate embedding` errors**
-Solution: Check that your OpenRouter API key is valid and has credits. Go to openrouter.ai/credits to verify your balance. The embedding model (text-embedding-3-small) costs $0.02 per million tokens — even a large import costs pennies.
+Solution: Embeddings are now generated locally and for free via self-hosted TEI — there's no per-token cost. If embeddings fail, check that `EMBED_BASE_URL` is reachable (default `http://mac-mini-bruce:8080/v1`). The OpenRouter API key only needs credits for summarization — go to openrouter.ai/credits to verify that balance.
 
 **Issue: Want to import a category not in the default list**
 Solution: Use `--categories` to specify any category that has a `MyActivity.json` file. For example: `--categories "Gemini Apps,Google Analytics"`. Run without `--categories` first using `--dry-run` to see all available categories.

@@ -36,7 +36,7 @@ No special configuration is needed for any of these — the script handles them 
 - Working Open Brain setup ([guide](../../docs/01-getting-started.md))
 - Python 3.10+
 - Your Supabase project URL and API key
-- OpenRouter API key (for embeddings and optional LLM chunking)
+- OpenRouter API key — OPTIONAL, only for LLM chunking of long notes (embeddings now use self-hosted TEI)
 - Recommended: add a `content_fingerprint` column and unique index for database-level dedup (see [Re-running and Deduplication](#re-running-and-deduplication))
 
 ## Credential Tracker
@@ -91,7 +91,7 @@ FILE LOCATION
    python import-obsidian.py /path/to/your/vault --limit 20 --verbose
    ```
 
-   The script runs a preflight check before any import — it verifies your Supabase connection and OpenRouter API key before spending time on chunking or embeddings.
+   The script runs a preflight check before any import — it verifies your Supabase connection and the embedder (self-hosted TEI) before spending time on chunking or embeddings. Your OpenRouter API key is only checked if LLM chunking is enabled.
 
 6. **Run the full import** once you're satisfied:
 
@@ -101,7 +101,7 @@ FILE LOCATION
 
 7. **Verify in Supabase.** Open your Supabase dashboard → Table Editor → `thoughts`. You should see rows with:
    - `content` — your note text with an `[Obsidian: Title | Folder]` prefix
-   - `embedding` — a 1536-dimensional vector
+   - `embedding` — a 384-dimensional vector
    - `metadata` — JSON with source, title, folder, tags, date, and wikilinks
 
 ## Options
@@ -171,7 +171,7 @@ Use `--no-llm` to skip step 3 if you want to avoid LLM costs. Heading-based spli
 
 ## Cost Estimate
 
-Costs depend on vault size and whether LLM chunking is enabled. Embeddings use `text-embedding-3-small` and LLM chunking uses `gpt-4o-mini`, both via OpenRouter.
+Costs depend on vault size and whether LLM chunking is enabled. Embeddings use `BAAI/bge-small-en-v1.5` (self-hosted TEI, free); LLM chunking uses `gpt-4o-mini` via OpenRouter.
 
 | Vault size | Embeddings only (`--no-llm`) | With LLM chunking |
 |------------|------------------------------|---------------------|
@@ -181,12 +181,12 @@ Costs depend on vault size and whether LLM chunking is enabled. Embeddings use `
 
 Use `--dry-run` to see how many thoughts your vault would generate before committing to a full run. Use `--no-embed` to skip embeddings entirely (zero API cost) if you plan to generate them separately.
 
-**Time estimate:** Roughly 1 second per thought or 16 minutes per 1,000 thoughts. A 700-note vault producing ~2,700 thoughts takes about 45 minutes. The bottleneck is embedding generation — each thought requires a round-trip API call.
+**Time estimate:** Roughly 1 second per thought or 16 minutes per 1,000 thoughts. A 700-note vault producing ~2,700 thoughts takes about 45 minutes. Embeddings are now a fast local TEI call (~8ms each); the bottleneck is the per-thought Supabase insert.
 
 ## Rate Limiting
 
 The script self-throttles to respect upstream API limits:
-- **150ms delay** between embedding API calls to avoid flooding OpenRouter
+- **150ms delay** between embedding API calls to avoid flooding the embedder
 - **1-second pause** every 50 inserts to give Supabase breathing room
 - **Exponential backoff** on 429/5xx errors (2s → 4s → 8s, up to 3 retries)
 
@@ -250,7 +250,7 @@ retrieve only Apple Journal entries, etc.
 Solution: Make sure you ran `pip install -r requirements.txt`. If using a virtual environment, activate it first.
 
 **Issue: Import is slow on large vaults (1000+ notes)**
-Solution: Embedding generation is the bottleneck — each note requires an API call. Use `--limit` to import in batches, or `--no-llm` to skip LLM chunking and reduce API calls. The script rate-limits itself to avoid hitting OpenRouter quotas.
+Solution: Embeddings now hit a local TEI endpoint (~8ms each), so they're rarely the bottleneck — the per-thought Supabase insert is. If embeddings are slow or failing, check `EMBED_BASE_URL` points at a reachable TEI server. Use `--limit` to import in batches, or `--no-llm` to skip LLM chunking.
 
 **Issue: Some notes are skipped unexpectedly**
 Solution: Run with `--verbose` to see which notes are filtered and why. Common reasons: notes under 50 words (adjust with `--min-words`), notes in a `Templates/` folder, or notes already in the sync log. Check `--dry-run` output first.

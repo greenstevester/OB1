@@ -51,9 +51,12 @@ DEFAULT_MIN_WORDS = 50
 WHOLE_NOTE_THRESHOLD = 500      # notes under this word count → 1 thought
 LLM_CHUNK_THRESHOLD = 1000     # sections over this → LLM distillation
 
-# Embedding model
-EMBEDDING_MODEL = "openai/text-embedding-3-small"
-EMBEDDING_DIMS = 1536
+# Embeddings: self-hosted TEI (BAAI/bge-small-en-v1.5, 384-d) via its
+# OpenAI-compatible /v1/embeddings endpoint. Content is embedded as a passage
+# (no query prefix). OpenRouter is still used for optional LLM chunking.
+EMBED_BASE_URL = os.environ.get("EMBED_BASE_URL", "http://mac-mini-bruce:8080/v1")
+EMBED_MODEL = os.environ.get("EMBED_MODEL", "BAAI/bge-small-en-v1.5")
+EMBEDDING_DIMS = 384
 
 # LLM model for chunking long sections
 LLM_MODEL = "openai/gpt-4o-mini"
@@ -339,18 +342,15 @@ def llm_distill(title: str, content: str, api_key: str) -> list[str]:
 
 # ── Embeddings ───────────────────────────────────────────────────────────────
 
-def generate_embedding(text: str, api_key: str) -> list[float] | None:
-    """Generate embedding via OpenRouter."""
+def generate_embedding(text: str) -> list[float] | None:
+    """Generate a 384-dim passage embedding via self-hosted TEI (bge-small)."""
     for attempt in range(MAX_RETRIES):
         try:
             resp = requests.post(
-                "https://openrouter.ai/api/v1/embeddings",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
+                f"{EMBED_BASE_URL}/embeddings",
+                headers={"Content-Type": "application/json"},
                 json={
-                    "model": EMBEDDING_MODEL,
+                    "model": EMBED_MODEL,
                     "input": text[:8000],  # respect token limits
                 },
                 timeout=30,
@@ -541,11 +541,6 @@ def main():
             print("Error: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY required", file=sys.stderr)
             print("Set them in .env or as environment variables", file=sys.stderr)
             sys.exit(1)
-        if not openrouter_key and not args.no_embed:
-            print("Error: OPENROUTER_API_KEY required for embeddings", file=sys.stderr)
-            print("Or use --no-embed to skip embedding generation", file=sys.stderr)
-            sys.exit(1)
-
     use_llm = not args.no_llm and bool(openrouter_key)
 
     # ── Preflight: validate connections before any real work ──────────────────
@@ -576,7 +571,7 @@ def main():
 
         # Test OpenRouter: verify the embedding endpoint works with a short string
         if not args.no_embed:
-            test_embedding = generate_embedding("preflight check", openrouter_key)
+            test_embedding = generate_embedding("preflight check")
             if not test_embedding:
                 print("Error: embedding preflight failed.", file=sys.stderr)
                 print("  Check OPENROUTER_API_KEY in .env and that your account has credit.",
@@ -807,7 +802,7 @@ def main():
         # Generate embedding (skip if --no-embed)
         embedding = None
         if not args.no_embed:
-            embedding = generate_embedding(thought['content'], openrouter_key)
+            embedding = generate_embedding(thought['content'])
             if not embedding:
                 embed_failures += 1
             else:

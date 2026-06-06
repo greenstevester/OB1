@@ -71,9 +71,8 @@ LLM PROVIDER
   LLM_MODEL (default: claude-haiku-4-5): ____________
 
 REQUIRED WHEN --output-mode=thought OR --semantic-expand
-  EMBEDDING_BASE_URL (default: openai):  ____________
-  EMBEDDING_API_KEY:                     ____________
-  EMBEDDING_MODEL (default: text-embedding-3-small): ____________
+  EMBED_BASE_URL (default: http://mac-mini-bruce:8080/v1, self-hosted TEI, no key): ____________
+  EMBED_MODEL (default: BAAI/bge-small-en-v1.5, 384-d): ____________
 
 --------------------------------------
 ```
@@ -176,14 +175,14 @@ node generate-wiki.mjs --entity "PostgreSQL" --output-mode file
 # Cache under entities.metadata.wiki_page — no filesystem, queryable via SQL
 node generate-wiki.mjs --entity "PostgreSQL" --output-mode entity-metadata
 
-# Store as a dossier thought — REQUIRES EMBEDDING_API_KEY so the dossier is
+# Store as a dossier thought — REQUIRES EMBED_BASE_URL so the dossier is
 # retrievable via match_thoughts / MCP search. Without an embedding the row
-# is unreachable, so the CLI refuses to run if the key is missing. READ THE
+# is unreachable, so the CLI refuses to run if it is unset. READ THE
 # TRADE-OFFS SECTION BELOW before using this mode.
 node generate-wiki.mjs --entity "PostgreSQL" --output-mode thought
 ```
 
-**Enable semantic expansion** (requires `EMBEDDING_API_KEY`):
+**Enable semantic expansion** (requires `EMBED_BASE_URL`):
 
 ```bash
 node generate-wiki.mjs --entity "ExoCortex" --semantic-expand
@@ -205,7 +204,7 @@ Pick the mode that matches how you plan to consume the wikis. Each has its own c
 |------|----------------|------|------|
 | `file` (default) | `./wikis/<slug>.md` | Human-readable, git-versionable, Obsidian-compatible, zero DB writes | Not queryable from SQL or MCP tools; lives outside the brain. Slug is derived from `canonical_name` with non-alphanumerics stripped, so distinct entities like `C`, `C#`, and `C++` share a base slug — the writer appends `-1`, `-2`, ... to avoid overwrites (and logs a warning). Re-running for the same entity id still overwrites its own file. |
 | `entity-metadata` | `entities.metadata.wiki_page` JSONB | Queryable via SQL, travels with the entity, no new rows | Not searchable via embeddings, not picked up by `search_thoughts` |
-| `thought` | A new row in `public.thoughts` with `metadata.type = 'dossier'` | Retrievable via normal search / MCP tools, full provenance back to the atoms it summarizes | **Requires `EMBEDDING_API_KEY`** (the dossier is embedded at write time so match_thoughts can find it). **Can pollute semantic search** — a long dossier that restates 20 atoms will match many queries and rank above the atoms themselves |
+| `thought` | A new row in `public.thoughts` with `metadata.type = 'dossier'` | Retrievable via normal search / MCP tools, full provenance back to the atoms it summarizes | **Requires `EMBED_BASE_URL`** (the dossier is embedded at write time so match_thoughts can find it). **Can pollute semantic search** — a long dossier that restates 20 atoms will match many queries and rank above the atoms themselves |
 
 > [!WARNING]
 > **Thought-mode pollution trade-off.** Storing the wiki back as a thought makes it show up in every search that touches the entity. Karpathy's original design argument against this is valid: a compressed summary that repeats 20 atomic facts will match any query that would have matched any of them, and because it's longer and more "on-topic" it often ranks above the atoms. That's good for "tell me about X" queries but bad for "what did I say on 2026-03-02 about X" queries.

@@ -31,6 +31,10 @@
  * Optional env vars:
  *   LLM_BASE_URL            default: https://openrouter.ai/api/v1
  *   LLM_MODEL               default: anthropic/claude-haiku-4-5
+ *   EMBED_BASE_URL          default: http://mac-mini-bruce:8080/v1 (self-hosted TEI)
+ *   EMBED_MODEL             default: BAAI/bge-small-en-v1.5 (384-d)
+ *   EMBED_QUERY_PREFIX      bge search prefix, used by --semantic-expand only
+ *   EMBED_API_KEY           only if your embedder requires auth (TEI does not)
  *   OB_WIKI_OUT_DIR         default: ./wikis
  *   OB_WIKI_APP_NAME        OpenRouter X-Title / HTTP-Referer header value
  */
@@ -128,7 +132,7 @@ function printUsage() {
       "  --model <id>                  LLM model id (default: env LLM_MODEL or anthropic/claude-haiku-4-5).",
       "  --max-linked <N>              Max linked thoughts sent to model (default: 25).",
       "  --max-semantic <N>            Max semantic matches sent to model (default: 15).",
-      "  --semantic-expand             Enable semantic expansion (requires EMBEDDING_* env).",
+      "  --semantic-expand             Enable semantic expansion (uses the EMBED_* embedder).",
       "  --batch-min-linked <N>        Batch threshold (default: 3).",
       "  --batch-limit <N>             Max entities processed per batch run (default: 25).",
       "  --dry-run                     Print wiki to stdout, skip writes.",
@@ -300,16 +304,19 @@ async function listBatchCandidates(sb, minLinked, limit) {
 // ---------------------------------------------------------------
 
 async function embedQuery(env, text) {
-  // Embedding provider is decoupled from the chat LLM. Defaults to OpenAI
-  // text-embedding-3-small at 1536 dims (matches the stock OB1 vector(1536)
-  // column). Users can override via env.
-  const base = (env.EMBEDDING_BASE_URL || "https://api.openai.com/v1").replace(/\/$/, "");
-  const key = env.EMBEDDING_API_KEY;
-  const model = env.EMBEDDING_MODEL || "text-embedding-3-small";
-  if (!key) throw new Error("EMBEDDING_API_KEY not set (required with --semantic-expand).");
+  // Embedding provider is decoupled from the chat LLM. Defaults to self-hosted
+  // TEI (BAAI/bge-small-en-v1.5, 384-d) via its OpenAI-compatible /v1/embeddings
+  // endpoint, matching the migrated OB1 vector(384) column. TEI needs no API
+  // key; set EMBED_API_KEY only when pointing at a provider that requires one.
+  // This embeds `text` verbatim — search callers add the bge query prefix.
+  const base = (env.EMBED_BASE_URL || "http://mac-mini-bruce:8080/v1").replace(/\/$/, "");
+  const key = env.EMBED_API_KEY;
+  const model = env.EMBED_MODEL || "BAAI/bge-small-en-v1.5";
+  const headers = { "content-type": "application/json" };
+  if (key) headers.authorization = `Bearer ${key}`;
   const res = await fetch(`${base}/embeddings`, {
     method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
+    headers,
     body: JSON.stringify({ model, input: text }),
   });
   if (!res.ok) throw new Error(`embedding failed: ${res.status} ${await res.text()}`);
@@ -325,15 +332,15 @@ async function embedQuery(env, text) {
 // match_thoughts-signature probe, which is only needed for --semantic-expand;
 // thought-mode only writes embeddings, it doesn't query them.
 let _embedDimCache = null;
-async function preflightEmbeddingDim(sb, env, expected = 1536, checkMatchRpc = true) {
+async function preflightEmbeddingDim(sb, env, expected = 384, checkMatchRpc = true) {
   if (_embedDimCache !== null) return _embedDimCache;
   const probe = await embedQuery(env, "dimension check");
   _embedDimCache = Array.isArray(probe) ? probe.length : 0;
   if (_embedDimCache !== expected) {
     throw new Error(
-      `Embedding dim mismatch: EMBEDDING_MODEL returned ${_embedDimCache} dims ` +
+      `Embedding dim mismatch: EMBED_MODEL returned ${_embedDimCache} dims ` +
         `but thoughts.embedding is vector(${expected}). ` +
-        `Either set EMBEDDING_MODEL to a ${expected}-dim model (default: text-embedding-3-small), ` +
+        `Either set EMBED_MODEL to a ${expected}-dim model (default: BAAI/bge-small-en-v1.5), ` +
         `or ALTER COLUMN thoughts.embedding to match your model's output size.`,
     );
   }
@@ -361,7 +368,12 @@ async function preflightEmbeddingDim(sb, env, expected = 1536, checkMatchRpc = t
 }
 
 async function semanticExpand(sb, env, entity) {
-  const query = `${entity.canonical_name} (${entity.entity_type})`;
+  // bge is asymmetric: searches get the query instruction prefix; stored
+  // passages (thought-mode dossiers) do not. See embedQuery — it embeds
+  // verbatim, so the prefix is applied here at the search call site only.
+  const prefix = env.EMBED_QUERY_PREFIX
+    ?? "Represent this sentence for searching relevant passages: ";
+  const query = `${prefix}${entity.canonical_name} (${entity.entity_type})`;
   const embedding = await embedQuery(env, query);
   if (!embedding) return [];
   // Call the stock match_thoughts RPC from the getting-started guide.
@@ -706,13 +718,13 @@ async function writeDossierThought(sb, env, entity, wiki, sourceCounts, provenan
   // dossier without an embedding is unreachable via match_thoughts / MCP
   // search, which is the entire point of this output mode. Writing the row
   // anyway would silently produce an unsearchable dossier while reporting
-  // success. main() enforces that EMBEDDING_API_KEY is set when
-  // --output-mode=thought, so reaching this code without a key is a bug.
+  // success. The dossier content is embedded as a passage (no query prefix);
+  // main()'s preflightEmbeddingDim verifies the embedder works before we start.
   const embedding = await embedQuery(env, content);
   if (!embedding) {
     throw new Error(
       `[wiki] dossier embedding returned empty for #${entity.id}; ` +
-        `refusing to write an unsearchable dossier (check EMBEDDING_MODEL output).`,
+        `refusing to write an unsearchable dossier (check EMBED_MODEL output).`,
     );
   }
 
@@ -866,21 +878,10 @@ async function main() {
     }
   }
   // --output-mode=thought writes a dossier row into public.thoughts and relies
-  // on an embedding for match_thoughts / MCP search. Without an embedding the
-  // row is unreachable — the entire point of the mode is defeated. Enforce the
-  // required env up front so we fail at CLI parse instead of after the LLM
-  // call for the first entity. --semantic-expand has its own check further
-  // down, but thought mode needs the key regardless of semantic expansion.
-  if (args.outputMode === "thought" && !env.EMBEDDING_API_KEY) {
-    console.error(
-      "Missing required env var: EMBEDDING_API_KEY " +
-        "(required when --output-mode=thought; dossier rows must be embedded " +
-        "to be retrievable via match_thoughts / MCP search). " +
-        "Set EMBEDDING_API_KEY (and optionally EMBEDDING_BASE_URL / " +
-        "EMBEDDING_MODEL) or switch to --output-mode=file | entity-metadata.",
-    );
-    process.exit(2);
-  }
+  // on an embedding for match_thoughts / MCP search. The default TEI embedder
+  // needs no API key, so there's no required-key check here — the
+  // preflightEmbeddingDim probe below exercises the embedder up front and fails
+  // with an actionable error if it's misconfigured, before the per-entity loop.
   const sb = createSupabase(env);
 
   // Preflight the embedding provider once per run when semantic expansion is
@@ -891,7 +892,7 @@ async function main() {
   // is on. Users without match_thoughts can still use --output-mode=thought.
   if (args.semanticExpand || args.outputMode === "thought") {
     try {
-      await preflightEmbeddingDim(sb, env, 1536, args.semanticExpand);
+      await preflightEmbeddingDim(sb, env, 384, args.semanticExpand);
     } catch (err) {
       const label = args.semanticExpand
         ? "--semantic-expand"

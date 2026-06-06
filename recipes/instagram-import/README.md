@@ -26,7 +26,7 @@ Handles Meta's double-encoded UTF-8 text (latin1 → UTF-8 conversion).
 - Working Open Brain setup ([guide](../../docs/01-getting-started.md))
 - **Instagram data export** — download from Instagram Settings
 - **Node.js 18+** installed
-- **OpenRouter API key** for embedding generation
+- **Self-hosted TEI embedder** (bge-small, 384-d) reachable at `EMBED_BASE_URL` (default `http://mac-mini-bruce:8080/v1`) — no API key needed
 
 ## Credential Tracker
 
@@ -37,9 +37,6 @@ INSTAGRAM IMPORT -- CREDENTIAL TRACKER
 FROM YOUR OPEN BRAIN SETUP
   Supabase URL:          ____________
   Service Role Key:      ____________
-
-FROM OPENROUTER
-  API Key:               ____________
 
 --------------------------------------
 ```
@@ -64,7 +61,7 @@ FROM OPENROUTER
    ```env
    SUPABASE_URL=https://your-project.supabase.co
    SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
-   OPENROUTER_API_KEY=sk-or-v1-your-key
+   # EMBED_BASE_URL=http://mac-mini-bruce:8080/v1   # default; bge-small 384-d, no key needed
    ```
 
 4. **Preview what will be imported** (dry run):
