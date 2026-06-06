@@ -31,12 +31,54 @@ Every contribution lives in its own subfolder under the right category and must 
 
 Each category has a `_template/` folder with a starter README and `metadata.json`. Copy, don't edit — the PR gate excludes templates from contribution checks.
 
+## Parallel Agent Worktrees
+
+When multiple AI agents or assistant chats work on this repo, do not put them in the same checkout.
+
+### Setup pattern
+
+- Treat the main repo checkout as the canonical repo for pulling, inspection, and creating worktrees.
+- Create one Git worktree per active agent, task, or PR-sized workstream.
+- Give each worktree a descriptive folder name and a matching branch name.
+- Start every agent task by naming the exact absolute worktree path it owns.
+- The assigned worktree path is the boundary. The chat is not the boundary.
+
+### Agent assignment template
+
+Start each parallel-agent task with:
+
+```text
+Repository worktree:
+/ABSOLUTE/PATH/TO/PROJECT-WORKTREE
+
+Branch:
+codex/SHORT-TASK-NAME
+
+Task:
+DESCRIBE THE EXACT WORK.
+```
+
+### Rules
+
+- Do not switch branches in the canonical repo while another agent may be working.
+- Do not edit sibling worktrees unless explicitly asked.
+- Before staging or committing, run `git status --short` and stage only files that belong to the current task.
+- If `main` or another branch changed underneath the worktree, pause before merging or rebasing unless the task explicitly says to finish the PR end to end.
+- After a branch is merged and the worktree is clean, remove the finished worktree with `git worktree remove /ABSOLUTE/PATH/TO/PROJECT-WORKTREE`.
+
+### Quick checks
+
+- If another chat suddenly changed branches, both chats were probably in the same working directory.
+- If `git worktree add` says a branch is already checked out, create a new branch name or remove the old clean worktree.
+- If cleanup fails, inspect `git status --short` and preserve uncommitted work.
+
 ## Guard Rails
 
 - **Never modify the core `thoughts` table structure.** Adding columns is fine; altering or dropping existing ones is not.
 - **No credentials, API keys, or secrets in any file.** Use environment variables.
 - **No binary blobs** over 1MB. No `.exe`, `.dmg`, `.zip`, `.tar.gz`.
 - **No `DROP TABLE`, `DROP DATABASE`, `TRUNCATE`, or unqualified `DELETE FROM`** in SQL files.
+- **Avoid profanity in all content.** Keep docs, examples, seed data, UI copy, prompts, walkthroughs, and generated assets clean and professional.
 - **MCP servers must be remote (Supabase Edge Functions), not local.** Never use `claude_desktop_config.json`, `StdioServerTransport`, or local Node.js servers. All extensions deploy as Edge Functions and connect via Claude Desktop's custom connectors UI (Settings → Connectors → Add custom connector → paste URL). See `docs/01-getting-started.md` Step 7 for the pattern.
 
 ## Common Commands
@@ -49,11 +91,11 @@ This repo has no top-level `package.json` — work happens inside contribution f
   `python3 -m pip install check-jsonschema && check-jsonschema --schemafile .github/metadata.schema.json <path>/metadata.json`
 - **Typecheck the canonical MCP server** (Deno):
   `cd server && deno check index.ts`
-- **Read `.github/workflows/ob1-gate.yml`** to step through the deterministic PR rules locally — it's a single bash script and is the source of truth for what a contribution must satisfy.
+- **Read `.github/workflows/ob1-gate-v2.yml`** to step through the deterministic PR rules locally — it's a single bash script and is the source of truth for what a contribution must satisfy.
 
 ## CI Workflows
 
-- `.github/workflows/ob1-gate.yml` — **OB1 PR Gate.** Deterministic bash checks (folder structure, metadata schema, secrets scan, SQL safety, README completeness, broken links, remote-MCP enforcement, tool-audit link). Must pass before human review. Skipped for `[docs]` PRs.
+- `.github/workflows/ob1-gate-v2.yml` — **OB1 PR Gate.** Deterministic bash checks (folder structure, metadata schema, secrets scan, SQL safety, README completeness, broken links, remote-MCP enforcement, tool-audit link). Must pass before human review. Skipped for `[docs]` PRs.
 - `.github/workflows/claude-review.yml` — LLM clarity/alignment review (qualitative; complements the gate).
 - `.github/workflows/markdown-lint.yml` — `markdownlint-cli2` on changed `.md` files.
 
@@ -64,14 +106,14 @@ When the gate fails, read its inline comment on the PR — it names exactly whic
 - **Title format:** `[category] Short description` (e.g., `[recipes] Email history import via Gmail API`, `[skills] Panning for Gold standalone skill pack`)
 - **Branch convention:** `contrib/<github-username>/<short-description>`
 - **Commit prefixes:** `[category]` matching the contribution type
-- Every PR must pass the automated review checks in `.github/workflows/ob1-gate.yml` before human review
+- Every PR must pass the automated review checks in `.github/workflows/ob1-gate-v2.yml` before human review
 - See `CONTRIBUTING.md` for the full review process, metadata.json template, and README requirements
 
 ## Key Files
 
 - `CONTRIBUTING.md` — Source of truth for contribution rules, metadata format, and the review process
-- `.github/workflows/ob1-gate.yml` — Deterministic PR gate (folder, metadata, secrets, SQL safety, links)
-- `.github/workflows/claude-review.yml` — LLM clarity/alignment review
+- `.github/workflows/ob1-gate-v2.yml` — Automated PR gate
+- `.github/workflows/claude-review.yml` — Maintainer-triggered Claude PR review
 - `.github/metadata.schema.json` — JSON schema for metadata.json validation
 - `.github/PULL_REQUEST_TEMPLATE.md` — PR description template
 - `server/index.ts` — Canonical MCP server reference implementation
