@@ -11,6 +11,11 @@ hear, that then searches it back efficiently *and* — running on a schedule in 
 background — surfaces patterns and links across what you've ingested to suggest new ideas
 and connections you'd never have made yourself.
 
+**Technically:** a persistent AI memory system — one database (Supabase + pgvector), one
+MCP protocol, any AI client. The pgvector embeddings are what make the cross-time
+pattern-surfacing possible: semantically related items link up even when they share no
+keywords.
+
 ## The problem
 
 I can't remember everything I read, see, and hear. Bookmarks rot, notes get lost, and the
