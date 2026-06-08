@@ -34,6 +34,14 @@ Single user (me) first. The priority order is:
 Everything in the roadmap is gated on "stable for one user" first. No multi-tenant /
 audience features until the core loop is reliable for me.
 
+> **Designed but gated (2026-06-08).** The multi-tenant model — *buckets* you can share
+> two-way with designated people, one model spanning personal / corporate (CEO → board →
+> all-company) / domestic (parents → kids) settings — is now fully **designed** so it's
+> ready to build *when this gate opens*. It is **not** active scope; the single-user core
+> stays the priority. v1 is **not** end-to-end encrypted (the brain host can read every
+> bucket). Design of record:
+> `open-brain-docker-stacks/docs/architecture/decisions/ADR-0003-buckets-and-sharing.md`.
+
 ## How it works — the core loop
 
 1. **Capture (the funnel).** GSD-fast ingestion from multiple sources into one brain:
