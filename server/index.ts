@@ -157,829 +157,826 @@ function chunkMarkdown(markdown: string): Chunk[] {
 // connect() rebinds the server, orphaning the first request's response. The
 // client then sees a hang or "Unexpected content type: null". A new instance per
 // request keeps each exchange isolated.
-//
-// NOTE: the tool registrations below are intentionally left at their original
-// indentation inside this function to keep the fix diff small and reviewable.
-function createServer() {
-const server = new McpServer({
-  name: "open-brain",
-  version: "1.0.0",
-});
+function buildServer(): McpServer {
+  const server = new McpServer({
+    name: "open-brain",
+    version: "1.0.0",
+  });
 
-// ChatGPT compatibility: restricted connector surfaces, company knowledge, and deep
-// research look for exact read-only `search` and `fetch` tool shapes.
-server.registerTool(
-  "search",
-  {
-    title: "Search Open Brain",
-    description:
-      "Search Open Brain memories by meaning. Use this read-only compatibility tool when ChatGPT needs search/fetch-style access to stored thoughts.",
-    annotations: {
-      readOnlyHint: true,
+  // ChatGPT compatibility: restricted connector surfaces, company knowledge, and deep
+  // research look for exact read-only `search` and `fetch` tool shapes.
+  server.registerTool(
+    "search",
+    {
+      title: "Search Open Brain",
+      description:
+        "Search Open Brain memories by meaning. Use this read-only compatibility tool when ChatGPT needs search/fetch-style access to stored thoughts.",
+      annotations: {
+        readOnlyHint: true,
+      },
+      inputSchema: {
+        query: z.string().describe("The search query to run against Open Brain thoughts"),
+      },
     },
-    inputSchema: {
-      query: z.string().describe("The search query to run against Open Brain thoughts"),
-    },
-  },
-  async ({ query }) => {
-    try {
-      const qEmb = await getEmbedding(query);
-      const { data, error } = await supabase.rpc("match_thoughts", {
-        query_embedding: qEmb,
-        match_threshold: 0.5,
-        match_count: 10,
-        filter: {},
-      });
+    async ({ query }) => {
+      try {
+        const qEmb = await getEmbedding(query);
+        const { data, error } = await supabase.rpc("match_thoughts", {
+          query_embedding: qEmb,
+          match_threshold: 0.5,
+          match_count: 10,
+          filter: {},
+        });
 
-      if (error) {
-        return {
-          content: [{ type: "text" as const, text: `Search error: ${error.message}` }],
-          isError: true,
-        };
-      }
-
-      const results = ((data || []) as ThoughtMatch[]).map((t) => ({
-        id: t.id,
-        title: thoughtTitle(t.content, t.created_at),
-        url: thoughtUrl(t.id),
-      }));
-
-      return {
-        content: [{ type: "text" as const, text: JSON.stringify({ results }) }],
-      };
-    } catch (err: unknown) {
-      return {
-        content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
-        isError: true,
-      };
-    }
-  }
-);
-
-server.registerTool(
-  "fetch",
-  {
-    title: "Fetch Open Brain Thought",
-    description:
-      "Fetch one Open Brain thought by ID after using search. Use this read-only compatibility tool to retrieve the full text and metadata for citation.",
-    annotations: {
-      readOnlyHint: true,
-    },
-    inputSchema: {
-      id: z.string().describe("The Open Brain thought ID returned by the search tool"),
-    },
-  },
-  async ({ id }) => {
-    try {
-      const { data, error } = await supabase
-        .from("thoughts")
-        .select("id, content, metadata, created_at, updated_at")
-        .eq("id", id)
-        .single();
-
-      if (error) {
-        return {
-          content: [{ type: "text" as const, text: `Fetch error: ${error.message}` }],
-          isError: true,
-        };
-      }
-
-      const thought = data as ThoughtRecord;
-      const document = {
-        id: thought.id,
-        title: thoughtTitle(thought.content, thought.created_at),
-        text: thought.content,
-        url: thoughtUrl(thought.id),
-        metadata: {
-          ...thought.metadata,
-          created_at: thought.created_at,
-          updated_at: thought.updated_at,
-        },
-      };
-
-      return {
-        content: [{ type: "text" as const, text: JSON.stringify(document) }],
-      };
-    } catch (err: unknown) {
-      return {
-        content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
-        isError: true,
-      };
-    }
-  }
-);
-
-// Tool 1: Semantic Search
-server.registerTool(
-  "search_thoughts",
-  {
-    title: "Search Thoughts",
-    description:
-      "Search captured thoughts by meaning. Use this when the user asks about a topic, person, or idea they've previously captured.",
-    annotations: {
-      readOnlyHint: true,
-    },
-    inputSchema: {
-      query: z.string().describe("What to search for"),
-      limit: z.number().optional().default(10),
-      threshold: z.number().optional().default(0.5),
-    },
-  },
-  async ({ query, limit, threshold }) => {
-    try {
-      const qEmb = await getEmbedding(query);
-      const { data, error } = await supabase.rpc("match_thoughts", {
-        query_embedding: qEmb,
-        match_threshold: threshold,
-        match_count: limit,
-        filter: {},
-      });
-
-      if (error) {
-        return {
-          content: [{ type: "text" as const, text: `Search error: ${error.message}` }],
-          isError: true,
-        };
-      }
-
-      if (!data || data.length === 0) {
-        return {
-          content: [{ type: "text" as const, text: `No thoughts found matching "${query}".` }],
-        };
-      }
-
-      const results = data.map(
-        (
-          t: ThoughtMatch,
-          i: number
-        ) => {
-          const m = t.metadata || {};
-          const parts = [
-            `--- Result ${i + 1} (${(t.similarity * 100).toFixed(1)}% match) ---`,
-            `Captured: ${new Date(t.created_at).toLocaleDateString()}`,
-            `Type: ${m.type || "unknown"}`,
-          ];
-          if (Array.isArray(m.topics) && m.topics.length)
-            parts.push(`Topics: ${(m.topics as string[]).join(", ")}`);
-          if (Array.isArray(m.people) && m.people.length)
-            parts.push(`People: ${(m.people as string[]).join(", ")}`);
-          if (Array.isArray(m.action_items) && m.action_items.length)
-            parts.push(`Actions: ${(m.action_items as string[]).join("; ")}`);
-          parts.push(`\n${t.content}`);
-          return parts.join("\n");
+        if (error) {
+          return {
+            content: [{ type: "text" as const, text: `Search error: ${error.message}` }],
+            isError: true,
+          };
         }
-      );
 
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: `Found ${data.length} thought(s):\n\n${results.join("\n\n")}`,
-          },
-        ],
-      };
-    } catch (err: unknown) {
-      return {
-        content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
-        isError: true,
-      };
+        const results = ((data || []) as ThoughtMatch[]).map((t) => ({
+          id: t.id,
+          title: thoughtTitle(t.content, t.created_at),
+          url: thoughtUrl(t.id),
+        }));
+
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify({ results }) }],
+        };
+      } catch (err: unknown) {
+        return {
+          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
     }
-  }
-);
+  );
 
-// Tool 2: List Recent
-server.registerTool(
-  "list_thoughts",
-  {
-    title: "List Recent Thoughts",
-    description:
-      "List recently captured thoughts with optional filters by type, topic, person, or time range.",
-    annotations: {
-      readOnlyHint: true,
+  server.registerTool(
+    "fetch",
+    {
+      title: "Fetch Open Brain Thought",
+      description:
+        "Fetch one Open Brain thought by ID after using search. Use this read-only compatibility tool to retrieve the full text and metadata for citation.",
+      annotations: {
+        readOnlyHint: true,
+      },
+      inputSchema: {
+        id: z.string().describe("The Open Brain thought ID returned by the search tool"),
+      },
     },
-    inputSchema: {
-      limit: z.number().optional().default(10),
-      type: z.string().optional().describe("Filter by type: observation, task, idea, reference, person_note"),
-      topic: z.string().optional().describe("Filter by topic tag"),
-      person: z.string().optional().describe("Filter by person mentioned"),
-      days: z.number().optional().describe("Only thoughts from the last N days"),
-    },
-  },
-  async ({ limit, type, topic, person, days }) => {
-    try {
-      let q = supabase
-        .from("thoughts")
-        .select("content, metadata, created_at")
-        .order("created_at", { ascending: false })
-        .limit(limit);
-
-      if (type) q = q.contains("metadata", { type });
-      if (topic) q = q.contains("metadata", { topics: [topic] });
-      if (person) q = q.contains("metadata", { people: [person] });
-      if (days) {
-        const since = new Date();
-        since.setDate(since.getDate() - days);
-        q = q.gte("created_at", since.toISOString());
-      }
-
-      const { data, error } = await q;
-
-      if (error) {
-        return {
-          content: [{ type: "text" as const, text: `Error: ${error.message}` }],
-          isError: true,
-        };
-      }
-
-      if (!data || !data.length) {
-        return { content: [{ type: "text" as const, text: "No thoughts found." }] };
-      }
-
-      const results = data.map(
-        (
-          t: { content: string; metadata: Record<string, unknown>; created_at: string },
-          i: number
-        ) => {
-          const m = t.metadata || {};
-          const tags = Array.isArray(m.topics) ? (m.topics as string[]).join(", ") : "";
-          return `${i + 1}. [${new Date(t.created_at).toLocaleDateString()}] (${m.type || "??"}${tags ? " - " + tags : ""})\n   ${t.content}`;
-        }
-      );
-
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: `${data.length} recent thought(s):\n\n${results.join("\n\n")}`,
-          },
-        ],
-      };
-    } catch (err: unknown) {
-      return {
-        content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
-        isError: true,
-      };
-    }
-  }
-);
-
-// Tool 3: Stats
-server.registerTool(
-  "thought_stats",
-  {
-    title: "Thought Statistics",
-    description: "Get a summary of all captured thoughts: totals, types, top topics, and people.",
-    annotations: {
-      readOnlyHint: true,
-    },
-    inputSchema: {},
-  },
-  async () => {
-    try {
-      const { count } = await supabase
-        .from("thoughts")
-        .select("*", { count: "exact", head: true });
-
-      const { data } = await supabase
-        .from("thoughts")
-        .select("metadata, created_at")
-        .order("created_at", { ascending: false });
-
-      const types: Record<string, number> = {};
-      const topics: Record<string, number> = {};
-      const people: Record<string, number> = {};
-
-      for (const r of data || []) {
-        const m = (r.metadata || {}) as Record<string, unknown>;
-        if (m.type) types[m.type as string] = (types[m.type as string] || 0) + 1;
-        if (Array.isArray(m.topics))
-          for (const t of m.topics) topics[t as string] = (topics[t as string] || 0) + 1;
-        if (Array.isArray(m.people))
-          for (const p of m.people) people[p as string] = (people[p as string] || 0) + 1;
-      }
-
-      const sort = (o: Record<string, number>): [string, number][] =>
-        Object.entries(o)
-          .sort((a, b) => b[1] - a[1])
-          .slice(0, 10);
-
-      const lines: string[] = [
-        `Total thoughts: ${count}`,
-        `Date range: ${
-          data?.length
-            ? new Date(data[data.length - 1].created_at).toLocaleDateString() +
-              " → " +
-              new Date(data[0].created_at).toLocaleDateString()
-            : "N/A"
-        }`,
-        "",
-        "Types:",
-        ...sort(types).map(([k, v]) => `  ${k}: ${v}`),
-      ];
-
-      if (Object.keys(topics).length) {
-        lines.push("", "Top topics:");
-        for (const [k, v] of sort(topics)) lines.push(`  ${k}: ${v}`);
-      }
-
-      if (Object.keys(people).length) {
-        lines.push("", "People mentioned:");
-        for (const [k, v] of sort(people)) lines.push(`  ${k}: ${v}`);
-      }
-
-      return { content: [{ type: "text" as const, text: lines.join("\n") }] };
-    } catch (err: unknown) {
-      return {
-        content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
-        isError: true,
-      };
-    }
-  }
-);
-
-// Tool 4: Capture Thought
-server.registerTool(
-  "capture_thought",
-  {
-    title: "Capture Thought",
-    description:
-      "Save a new thought to the Open Brain. Generates an embedding and extracts metadata automatically. Use this when the user wants to save something to their brain directly from any AI client — notes, insights, decisions, or migrated content from other systems.",
-    annotations: {
-      readOnlyHint: false,
-      openWorldHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-    },
-    inputSchema: {
-      content: z.string().describe("The thought to capture — a clear, standalone statement that will make sense when retrieved later by any AI"),
-    },
-  },
-  async ({ content }) => {
-    try {
-      const [embedding, metadata] = await Promise.all([
-        getEmbedding(content),
-        extractMetadata(content),
-      ]);
-
-      const { data: upsertResult, error: upsertError } = await supabase.rpc("upsert_thought", {
-        p_content: content,
-        p_payload: { metadata: { ...metadata, source: "mcp" } },
-      });
-
-      if (upsertError) {
-        return {
-          content: [{ type: "text" as const, text: `Failed to capture: ${upsertError.message}` }],
-          isError: true,
-        };
-      }
-
-      const thoughtId = upsertResult?.id;
-      const { error: embError } = await supabase
-        .from("thoughts")
-        .update({ embedding })
-        .eq("id", thoughtId);
-
-      if (embError) {
-        return {
-          content: [{ type: "text" as const, text: `Failed to save embedding: ${embError.message}` }],
-          isError: true,
-        };
-      }
-
-      const meta = metadata as Record<string, unknown>;
-      let confirmation = `Captured as ${meta.type || "thought"}`;
-      if (Array.isArray(meta.topics) && meta.topics.length)
-        confirmation += ` — ${(meta.topics as string[]).join(", ")}`;
-      if (Array.isArray(meta.people) && meta.people.length)
-        confirmation += ` | People: ${(meta.people as string[]).join(", ")}`;
-      if (Array.isArray(meta.action_items) && meta.action_items.length)
-        confirmation += ` | Actions: ${(meta.action_items as string[]).join("; ")}`;
-
-      return {
-        content: [{ type: "text" as const, text: confirmation }],
-      };
-    } catch (err: unknown) {
-      return {
-        content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
-        isError: true,
-      };
-    }
-  }
-);
-
-// Tool 5: Delete Obsidian Note
-server.registerTool(
-  "delete_note",
-  {
-    title: "Delete Obsidian Note",
-    description:
-      "Remove all chunks of an Obsidian note from Open Brain by note_id. Called by the Obsidian plugin when a tracked note is deleted from the vault. Idempotent.",
-    inputSchema: {
-      note_id: z
-        .string()
-        .uuid()
-        .describe("UUID from the Obsidian note's open_brain_id frontmatter"),
-    },
-  },
-  async ({ note_id }) => {
-    try {
-      const { error, count } = await supabase
-        .from("thoughts")
-        .delete({ count: "exact" })
-        .eq("note_id", note_id);
-
-      if (error) {
-        return {
-          content: [
-            { type: "text" as const, text: `delete_note failed: ${error.message}` },
-          ],
-          isError: true,
-        };
-      }
-
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify({ note_id, deleted: count ?? 0 }),
-          },
-        ],
-      };
-    } catch (err: unknown) {
-      return {
-        content: [
-          { type: "text" as const, text: `Error: ${(err as Error).message}` },
-        ],
-        isError: true,
-      };
-    }
-  }
-);
-
-// Tool 6: Count Pending Captures
-server.registerTool(
-  "count_pending_captures",
-  {
-    title: "Count Pending Captures",
-    description:
-      "Return the number of free-form captures (phone Shortcut, future webhook sources) created after the given timestamp. Used by the Obsidian plugin's indicator. Excludes note chunks and legacy Obsidian-sourced rows.",
-    inputSchema: {
-      since: z
-        .string()
-        .datetime()
-        .describe(
-          "ISO 8601 UTC timestamp. Only captures created strictly after this are counted."
-        ),
-    },
-  },
-  async ({ since }) => {
-    try {
-      const { count, error } = await supabase
-        .from("thoughts")
-        .select("*", { count: "exact", head: true })
-        .is("note_id", null)
-        .not("content", "like", "[Obsidian:%")
-        .gt("created_at", since);
-
-      if (error) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `count_pending_captures failed: ${error.message}`,
-            },
-          ],
-          isError: true,
-        };
-      }
-
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify({ count: count ?? 0 }),
-          },
-        ],
-      };
-    } catch (err: unknown) {
-      return {
-        content: [
-          { type: "text" as const, text: `Error: ${(err as Error).message}` },
-        ],
-        isError: true,
-      };
-    }
-  }
-);
-
-// Tool 7: List Pending Captures
-server.registerTool(
-  "list_pending_captures",
-  {
-    title: "List Pending Captures",
-    description:
-      "Return free-form captures (phone Shortcut, future webhook sources) created after the given timestamp, ordered by created_at ASC. Used by the Obsidian plugin to pull new thoughts into Inbox.md. Excludes note chunks and legacy Obsidian-sourced rows.",
-    inputSchema: {
-      since: z
-        .string()
-        .datetime()
-        .describe(
-          "ISO 8601 UTC timestamp. Only captures created strictly after this are returned."
-        ),
-      limit: z
-        .number()
-        .int()
-        .positive()
-        .max(500)
-        .optional()
-        .default(100)
-        .describe("Max rows to return. Defaults to 100; capped at 500."),
-    },
-  },
-  async ({ since, limit }) => {
-    try {
-      const { data, error } = await supabase
-        .from("thoughts")
-        .select("id, content, created_at, metadata")
-        .is("note_id", null)
-        .not("content", "like", "[Obsidian:%")
-        .gt("created_at", since)
-        .order("created_at", { ascending: true })
-        .limit(limit);
-
-      if (error) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `list_pending_captures failed: ${error.message}`,
-            },
-          ],
-          isError: true,
-        };
-      }
-
-      const captures = data ?? [];
-      const last_created_at =
-        captures.length > 0
-          ? captures[captures.length - 1].created_at
-          : null;
-
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify({ captures, last_created_at }),
-          },
-        ],
-      };
-    } catch (err: unknown) {
-      return {
-        content: [
-          { type: "text" as const, text: `Error: ${(err as Error).message}` },
-        ],
-        isError: true,
-      };
-    }
-  }
-);
-
-// Tool 8: Capture Obsidian Note
-server.registerTool(
-  "capture_note",
-  {
-    title: "Capture Obsidian Note",
-    description:
-      "Chunk an Obsidian note at H1/H2 boundaries and replace its rows in Open Brain. Each chunk is stored with the [Obsidian: title | path > heading] prefix, structural metadata, and an embedding. Idempotent — rerunning with the same note_id replaces the previous chunks.",
-    inputSchema: {
-      note_id: z
-        .string()
-        .uuid()
-        .describe("UUID from the Obsidian note's open_brain_id frontmatter"),
-      path: z
-        .string()
-        .describe(
-          "Directory-relative path from vault root, e.g. 'PIPELINES/3-PROJECTS'. Does not include the filename."
-        ),
-      title: z.string().describe("Filename without the .md extension"),
-      content: z
-        .string()
-        .describe(
-          "Full markdown body. Frontmatter is optional; the chunker strips it."
-        ),
-    },
-  },
-  async ({ note_id, path, title, content }) => {
-    try {
-      // Chunk and embed BEFORE mutating — if embedding fails the existing rows
-      // are untouched (no silent data loss from a partial delete+insert).
-      const noteChunks = chunkMarkdown(content);
-      if (noteChunks.length === 0) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify({ note_id, chunks: [] }),
-            },
-          ],
-        };
-      }
-
-      const buildPrefixedContent = (heading: string | null, body: string) =>
-        heading
-          ? `[Obsidian: ${title} | ${path} > ${heading}] ${body}`
-          : `[Obsidian: ${title} | ${path}] ${body}`;
-
-      const baseRows = noteChunks.map((c, index) => ({
-        content: buildPrefixedContent(c.heading, c.body),
-        note_id,
-        chunk_index: index,
-        content_fingerprint: null,
-        metadata: {
-          source: "obsidian",
-          title,
-          path,
-          heading: c.heading,
-          chunk_index: index,
-        },
-        updated_at: new Date().toISOString(),
-      }));
-
-      const embeddings = await Promise.all(
-        baseRows.map((r) => getEmbedding(r.content))
-      );
-
-      const rows = baseRows.map((r, i) => ({
-        ...r,
-        embedding: embeddings[i],
-      }));
-
-      // Embeddings ready — now replace the stored rows atomically.
-      const { error: deleteError } = await supabase
-        .from("thoughts")
-        .delete()
-        .eq("note_id", note_id);
-      if (deleteError) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `capture_note delete phase failed: ${deleteError.message}`,
-            },
-          ],
-          isError: true,
-        };
-      }
-
-      const { error: insertError } = await supabase
-        .from("thoughts")
-        .insert(rows);
-      if (insertError) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `capture_note insert phase failed: ${insertError.message}`,
-            },
-          ],
-          isError: true,
-        };
-      }
-
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify({
-              note_id,
-              chunks: noteChunks.map((c, index) => ({
-                index,
-                heading: c.heading,
-              })),
-            }),
-          },
-        ],
-      };
-    } catch (err: unknown) {
-      return {
-        content: [
-          { type: "text" as const, text: `Error: ${(err as Error).message}` },
-        ],
-        isError: true,
-      };
-    }
-  }
-);
-
-// Tool 9: Rename Obsidian Note
-server.registerTool(
-  "rename_note",
-  {
-    title: "Rename Obsidian Note",
-    description:
-      "Rewrite the [Obsidian: title | path > heading] prefix on every chunk of a note when its file is renamed or moved. Heading per chunk is read from metadata.heading. content_fingerprint stays NULL; embedding is NOT recomputed (re-sync via capture_note if you need fresh embeddings).",
-    inputSchema: {
-      note_id: z.string().uuid().describe("UUID of the note to rename."),
-      new_path: z
-        .string()
-        .describe(
-          "New directory-relative path from vault root, e.g. 'PIPELINES/4-ARCHIVED'. Excludes filename."
-        ),
-      new_title: z
-        .string()
-        .describe("New filename without the .md extension."),
-    },
-  },
-  async ({ note_id, new_path, new_title }) => {
-    try {
-      const { data: rows, error: fetchError } = await supabase
-        .from("thoughts")
-        .select("id, content, metadata")
-        .eq("note_id", note_id);
-
-      if (fetchError) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `rename_note fetch phase failed: ${fetchError.message}`,
-            },
-          ],
-          isError: true,
-        };
-      }
-
-      if (!rows || rows.length === 0) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify({ note_id, rows_updated: 0 }),
-            },
-          ],
-        };
-      }
-
-      const PREFIX_RE = /^\[Obsidian:[^\]]*\] ?/;
-      const now = new Date().toISOString();
-
-      const updates = rows.map((row) => {
-        const meta = (row.metadata as Record<string, unknown> | null) ?? {};
-        const heading = (meta.heading as string | null | undefined) ?? null;
-        const body = row.content.replace(PREFIX_RE, "");
-        const newContent = heading
-          ? `[Obsidian: ${new_title} | ${new_path} > ${heading}] ${body}`
-          : `[Obsidian: ${new_title} | ${new_path}] ${body}`;
-        const newMetadata = {
-          ...meta,
-          title: new_title,
-          path: new_path,
-        };
-        return supabase
+    async ({ id }) => {
+      try {
+        const { data, error } = await supabase
           .from("thoughts")
-          .update({
-            content: newContent,
-            metadata: newMetadata,
-            updated_at: now,
-          })
-          .eq("id", row.id);
-      });
+          .select("id, content, metadata, created_at, updated_at")
+          .eq("id", id)
+          .single();
 
-      const results = await Promise.all(updates);
-      const failed = results.filter((r) => r.error);
-      if (failed.length > 0) {
-        const first = failed[0].error!.message;
-        const extra =
-          failed.length > 1 ? ` (and ${failed.length - 1} more)` : "";
+        if (error) {
+          return {
+            content: [{ type: "text" as const, text: `Fetch error: ${error.message}` }],
+            isError: true,
+          };
+        }
+
+        const thought = data as ThoughtRecord;
+        const document = {
+          id: thought.id,
+          title: thoughtTitle(thought.content, thought.created_at),
+          text: thought.content,
+          url: thoughtUrl(thought.id),
+          metadata: {
+            ...thought.metadata,
+            created_at: thought.created_at,
+            updated_at: thought.updated_at,
+          },
+        };
+
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify(document) }],
+        };
+      } catch (err: unknown) {
+        return {
+          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  // Tool 1: Semantic Search
+  server.registerTool(
+    "search_thoughts",
+    {
+      title: "Search Thoughts",
+      description:
+        "Search captured thoughts by meaning. Use this when the user asks about a topic, person, or idea they've previously captured.",
+      annotations: {
+        readOnlyHint: true,
+      },
+      inputSchema: {
+        query: z.string().describe("What to search for"),
+        limit: z.number().optional().default(10),
+        threshold: z.number().optional().default(0.5),
+      },
+    },
+    async ({ query, limit, threshold }) => {
+      try {
+        const qEmb = await getEmbedding(query);
+        const { data, error } = await supabase.rpc("match_thoughts", {
+          query_embedding: qEmb,
+          match_threshold: threshold,
+          match_count: limit,
+          filter: {},
+        });
+
+        if (error) {
+          return {
+            content: [{ type: "text" as const, text: `Search error: ${error.message}` }],
+            isError: true,
+          };
+        }
+
+        if (!data || data.length === 0) {
+          return {
+            content: [{ type: "text" as const, text: `No thoughts found matching "${query}".` }],
+          };
+        }
+
+        const results = data.map(
+          (
+            t: ThoughtMatch,
+            i: number
+          ) => {
+            const m = t.metadata || {};
+            const parts = [
+              `--- Result ${i + 1} (${(t.similarity * 100).toFixed(1)}% match) ---`,
+              `Captured: ${new Date(t.created_at).toLocaleDateString()}`,
+              `Type: ${m.type || "unknown"}`,
+            ];
+            if (Array.isArray(m.topics) && m.topics.length)
+              parts.push(`Topics: ${(m.topics as string[]).join(", ")}`);
+            if (Array.isArray(m.people) && m.people.length)
+              parts.push(`People: ${(m.people as string[]).join(", ")}`);
+            if (Array.isArray(m.action_items) && m.action_items.length)
+              parts.push(`Actions: ${(m.action_items as string[]).join("; ")}`);
+            parts.push(`\n${t.content}`);
+            return parts.join("\n");
+          }
+        );
+
         return {
           content: [
             {
               type: "text" as const,
-              text: `rename_note update phase failed: ${first}${extra}`,
+              text: `Found ${data.length} thought(s):\n\n${results.join("\n\n")}`,
             },
+          ],
+        };
+      } catch (err: unknown) {
+        return {
+          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  // Tool 2: List Recent
+  server.registerTool(
+    "list_thoughts",
+    {
+      title: "List Recent Thoughts",
+      description:
+        "List recently captured thoughts with optional filters by type, topic, person, or time range.",
+      annotations: {
+        readOnlyHint: true,
+      },
+      inputSchema: {
+        limit: z.number().optional().default(10),
+        type: z.string().optional().describe("Filter by type: observation, task, idea, reference, person_note"),
+        topic: z.string().optional().describe("Filter by topic tag"),
+        person: z.string().optional().describe("Filter by person mentioned"),
+        days: z.number().optional().describe("Only thoughts from the last N days"),
+      },
+    },
+    async ({ limit, type, topic, person, days }) => {
+      try {
+        let q = supabase
+          .from("thoughts")
+          .select("content, metadata, created_at")
+          .order("created_at", { ascending: false })
+          .limit(limit);
+
+        if (type) q = q.contains("metadata", { type });
+        if (topic) q = q.contains("metadata", { topics: [topic] });
+        if (person) q = q.contains("metadata", { people: [person] });
+        if (days) {
+          const since = new Date();
+          since.setDate(since.getDate() - days);
+          q = q.gte("created_at", since.toISOString());
+        }
+
+        const { data, error } = await q;
+
+        if (error) {
+          return {
+            content: [{ type: "text" as const, text: `Error: ${error.message}` }],
+            isError: true,
+          };
+        }
+
+        if (!data || !data.length) {
+          return { content: [{ type: "text" as const, text: "No thoughts found." }] };
+        }
+
+        const results = data.map(
+          (
+            t: { content: string; metadata: Record<string, unknown>; created_at: string },
+            i: number
+          ) => {
+            const m = t.metadata || {};
+            const tags = Array.isArray(m.topics) ? (m.topics as string[]).join(", ") : "";
+            return `${i + 1}. [${new Date(t.created_at).toLocaleDateString()}] (${m.type || "??"}${tags ? " - " + tags : ""})\n   ${t.content}`;
+          }
+        );
+
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `${data.length} recent thought(s):\n\n${results.join("\n\n")}`,
+            },
+          ],
+        };
+      } catch (err: unknown) {
+        return {
+          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  // Tool 3: Stats
+  server.registerTool(
+    "thought_stats",
+    {
+      title: "Thought Statistics",
+      description: "Get a summary of all captured thoughts: totals, types, top topics, and people.",
+      annotations: {
+        readOnlyHint: true,
+      },
+      inputSchema: {},
+    },
+    async () => {
+      try {
+        const { count } = await supabase
+          .from("thoughts")
+          .select("*", { count: "exact", head: true });
+
+        const { data } = await supabase
+          .from("thoughts")
+          .select("metadata, created_at")
+          .order("created_at", { ascending: false });
+
+        const types: Record<string, number> = {};
+        const topics: Record<string, number> = {};
+        const people: Record<string, number> = {};
+
+        for (const r of data || []) {
+          const m = (r.metadata || {}) as Record<string, unknown>;
+          if (m.type) types[m.type as string] = (types[m.type as string] || 0) + 1;
+          if (Array.isArray(m.topics))
+            for (const t of m.topics) topics[t as string] = (topics[t as string] || 0) + 1;
+          if (Array.isArray(m.people))
+            for (const p of m.people) people[p as string] = (people[p as string] || 0) + 1;
+        }
+
+        const sort = (o: Record<string, number>): [string, number][] =>
+          Object.entries(o)
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 10);
+
+        const lines: string[] = [
+          `Total thoughts: ${count}`,
+          `Date range: ${
+            data?.length
+              ? new Date(data[data.length - 1].created_at).toLocaleDateString() +
+                " → " +
+                new Date(data[0].created_at).toLocaleDateString()
+              : "N/A"
+          }`,
+          "",
+          "Types:",
+          ...sort(types).map(([k, v]) => `  ${k}: ${v}`),
+        ];
+
+        if (Object.keys(topics).length) {
+          lines.push("", "Top topics:");
+          for (const [k, v] of sort(topics)) lines.push(`  ${k}: ${v}`);
+        }
+
+        if (Object.keys(people).length) {
+          lines.push("", "People mentioned:");
+          for (const [k, v] of sort(people)) lines.push(`  ${k}: ${v}`);
+        }
+
+        return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+      } catch (err: unknown) {
+        return {
+          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  // Tool 4: Capture Thought
+  server.registerTool(
+    "capture_thought",
+    {
+      title: "Capture Thought",
+      description:
+        "Save a new thought to the Open Brain. Generates an embedding and extracts metadata automatically. Use this when the user wants to save something to their brain directly from any AI client — notes, insights, decisions, or migrated content from other systems.",
+      annotations: {
+        readOnlyHint: false,
+        openWorldHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+      },
+      inputSchema: {
+        content: z.string().describe("The thought to capture — a clear, standalone statement that will make sense when retrieved later by any AI"),
+      },
+    },
+    async ({ content }) => {
+      try {
+        const [embedding, metadata] = await Promise.all([
+          getEmbedding(content),
+          extractMetadata(content),
+        ]);
+
+        const { data: upsertResult, error: upsertError } = await supabase.rpc("upsert_thought", {
+          p_content: content,
+          p_payload: { metadata: { ...metadata, source: "mcp" } },
+        });
+
+        if (upsertError) {
+          return {
+            content: [{ type: "text" as const, text: `Failed to capture: ${upsertError.message}` }],
+            isError: true,
+          };
+        }
+
+        const thoughtId = upsertResult?.id;
+        const { error: embError } = await supabase
+          .from("thoughts")
+          .update({ embedding })
+          .eq("id", thoughtId);
+
+        if (embError) {
+          return {
+            content: [{ type: "text" as const, text: `Failed to save embedding: ${embError.message}` }],
+            isError: true,
+          };
+        }
+
+        const meta = metadata as Record<string, unknown>;
+        let confirmation = `Captured as ${meta.type || "thought"}`;
+        if (Array.isArray(meta.topics) && meta.topics.length)
+          confirmation += ` — ${(meta.topics as string[]).join(", ")}`;
+        if (Array.isArray(meta.people) && meta.people.length)
+          confirmation += ` | People: ${(meta.people as string[]).join(", ")}`;
+        if (Array.isArray(meta.action_items) && meta.action_items.length)
+          confirmation += ` | Actions: ${(meta.action_items as string[]).join("; ")}`;
+
+        return {
+          content: [{ type: "text" as const, text: confirmation }],
+        };
+      } catch (err: unknown) {
+        return {
+          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  // Tool 5: Delete Obsidian Note
+  server.registerTool(
+    "delete_note",
+    {
+      title: "Delete Obsidian Note",
+      description:
+        "Remove all chunks of an Obsidian note from Open Brain by note_id. Called by the Obsidian plugin when a tracked note is deleted from the vault. Idempotent.",
+      inputSchema: {
+        note_id: z
+          .string()
+          .uuid()
+          .describe("UUID from the Obsidian note's open_brain_id frontmatter"),
+      },
+    },
+    async ({ note_id }) => {
+      try {
+        const { error, count } = await supabase
+          .from("thoughts")
+          .delete({ count: "exact" })
+          .eq("note_id", note_id);
+
+        if (error) {
+          return {
+            content: [
+              { type: "text" as const, text: `delete_note failed: ${error.message}` },
+            ],
+            isError: true,
+          };
+        }
+
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify({ note_id, deleted: count ?? 0 }),
+            },
+          ],
+        };
+      } catch (err: unknown) {
+        return {
+          content: [
+            { type: "text" as const, text: `Error: ${(err as Error).message}` },
           ],
           isError: true,
         };
       }
-
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify({ note_id, rows_updated: rows.length }),
-          },
-        ],
-      };
-    } catch (err: unknown) {
-      return {
-        content: [
-          { type: "text" as const, text: `Error: ${(err as Error).message}` },
-        ],
-        isError: true,
-      };
     }
-  }
-);
+  );
+
+  // Tool 6: Count Pending Captures
+  server.registerTool(
+    "count_pending_captures",
+    {
+      title: "Count Pending Captures",
+      description:
+        "Return the number of free-form captures (phone Shortcut, future webhook sources) created after the given timestamp. Used by the Obsidian plugin's indicator. Excludes note chunks and legacy Obsidian-sourced rows.",
+      inputSchema: {
+        since: z
+          .string()
+          .datetime()
+          .describe(
+            "ISO 8601 UTC timestamp. Only captures created strictly after this are counted."
+          ),
+      },
+    },
+    async ({ since }) => {
+      try {
+        const { count, error } = await supabase
+          .from("thoughts")
+          .select("*", { count: "exact", head: true })
+          .is("note_id", null)
+          .not("content", "like", "[Obsidian:%")
+          .gt("created_at", since);
+
+        if (error) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `count_pending_captures failed: ${error.message}`,
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify({ count: count ?? 0 }),
+            },
+          ],
+        };
+      } catch (err: unknown) {
+        return {
+          content: [
+            { type: "text" as const, text: `Error: ${(err as Error).message}` },
+          ],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  // Tool 7: List Pending Captures
+  server.registerTool(
+    "list_pending_captures",
+    {
+      title: "List Pending Captures",
+      description:
+        "Return free-form captures (phone Shortcut, future webhook sources) created after the given timestamp, ordered by created_at ASC. Used by the Obsidian plugin to pull new thoughts into Inbox.md. Excludes note chunks and legacy Obsidian-sourced rows.",
+      inputSchema: {
+        since: z
+          .string()
+          .datetime()
+          .describe(
+            "ISO 8601 UTC timestamp. Only captures created strictly after this are returned."
+          ),
+        limit: z
+          .number()
+          .int()
+          .positive()
+          .max(500)
+          .optional()
+          .default(100)
+          .describe("Max rows to return. Defaults to 100; capped at 500."),
+      },
+    },
+    async ({ since, limit }) => {
+      try {
+        const { data, error } = await supabase
+          .from("thoughts")
+          .select("id, content, created_at, metadata")
+          .is("note_id", null)
+          .not("content", "like", "[Obsidian:%")
+          .gt("created_at", since)
+          .order("created_at", { ascending: true })
+          .limit(limit);
+
+        if (error) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `list_pending_captures failed: ${error.message}`,
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        const captures = data ?? [];
+        const last_created_at =
+          captures.length > 0
+            ? captures[captures.length - 1].created_at
+            : null;
+
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify({ captures, last_created_at }),
+            },
+          ],
+        };
+      } catch (err: unknown) {
+        return {
+          content: [
+            { type: "text" as const, text: `Error: ${(err as Error).message}` },
+          ],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  // Tool 8: Capture Obsidian Note
+  server.registerTool(
+    "capture_note",
+    {
+      title: "Capture Obsidian Note",
+      description:
+        "Chunk an Obsidian note at H1/H2 boundaries and replace its rows in Open Brain. Each chunk is stored with the [Obsidian: title | path > heading] prefix, structural metadata, and an embedding. Idempotent — rerunning with the same note_id replaces the previous chunks.",
+      inputSchema: {
+        note_id: z
+          .string()
+          .uuid()
+          .describe("UUID from the Obsidian note's open_brain_id frontmatter"),
+        path: z
+          .string()
+          .describe(
+            "Directory-relative path from vault root, e.g. 'PIPELINES/3-PROJECTS'. Does not include the filename."
+          ),
+        title: z.string().describe("Filename without the .md extension"),
+        content: z
+          .string()
+          .describe(
+            "Full markdown body. Frontmatter is optional; the chunker strips it."
+          ),
+      },
+    },
+    async ({ note_id, path, title, content }) => {
+      try {
+        // Chunk and embed BEFORE mutating — if embedding fails the existing rows
+        // are untouched (no silent data loss from a partial delete+insert).
+        const noteChunks = chunkMarkdown(content);
+        if (noteChunks.length === 0) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: JSON.stringify({ note_id, chunks: [] }),
+              },
+            ],
+          };
+        }
+
+        const buildPrefixedContent = (heading: string | null, body: string) =>
+          heading
+            ? `[Obsidian: ${title} | ${path} > ${heading}] ${body}`
+            : `[Obsidian: ${title} | ${path}] ${body}`;
+
+        const baseRows = noteChunks.map((c, index) => ({
+          content: buildPrefixedContent(c.heading, c.body),
+          note_id,
+          chunk_index: index,
+          content_fingerprint: null,
+          metadata: {
+            source: "obsidian",
+            title,
+            path,
+            heading: c.heading,
+            chunk_index: index,
+          },
+          updated_at: new Date().toISOString(),
+        }));
+
+        const embeddings = await Promise.all(
+          baseRows.map((r) => getEmbedding(r.content))
+        );
+
+        const rows = baseRows.map((r, i) => ({
+          ...r,
+          embedding: embeddings[i],
+        }));
+
+        // Embeddings ready — now replace the stored rows atomically.
+        const { error: deleteError } = await supabase
+          .from("thoughts")
+          .delete()
+          .eq("note_id", note_id);
+        if (deleteError) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `capture_note delete phase failed: ${deleteError.message}`,
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        const { error: insertError } = await supabase
+          .from("thoughts")
+          .insert(rows);
+        if (insertError) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `capture_note insert phase failed: ${insertError.message}`,
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify({
+                note_id,
+                chunks: noteChunks.map((c, index) => ({
+                  index,
+                  heading: c.heading,
+                })),
+              }),
+            },
+          ],
+        };
+      } catch (err: unknown) {
+        return {
+          content: [
+            { type: "text" as const, text: `Error: ${(err as Error).message}` },
+          ],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  // Tool 9: Rename Obsidian Note
+  server.registerTool(
+    "rename_note",
+    {
+      title: "Rename Obsidian Note",
+      description:
+        "Rewrite the [Obsidian: title | path > heading] prefix on every chunk of a note when its file is renamed or moved. Heading per chunk is read from metadata.heading. content_fingerprint stays NULL; embedding is NOT recomputed (re-sync via capture_note if you need fresh embeddings).",
+      inputSchema: {
+        note_id: z.string().uuid().describe("UUID of the note to rename."),
+        new_path: z
+          .string()
+          .describe(
+            "New directory-relative path from vault root, e.g. 'PIPELINES/4-ARCHIVED'. Excludes filename."
+          ),
+        new_title: z
+          .string()
+          .describe("New filename without the .md extension."),
+      },
+    },
+    async ({ note_id, new_path, new_title }) => {
+      try {
+        const { data: rows, error: fetchError } = await supabase
+          .from("thoughts")
+          .select("id, content, metadata")
+          .eq("note_id", note_id);
+
+        if (fetchError) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `rename_note fetch phase failed: ${fetchError.message}`,
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        if (!rows || rows.length === 0) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: JSON.stringify({ note_id, rows_updated: 0 }),
+              },
+            ],
+          };
+        }
+
+        const PREFIX_RE = /^\[Obsidian:[^\]]*\] ?/;
+        const now = new Date().toISOString();
+
+        const updates = rows.map((row) => {
+          const meta = (row.metadata as Record<string, unknown> | null) ?? {};
+          const heading = (meta.heading as string | null | undefined) ?? null;
+          const body = row.content.replace(PREFIX_RE, "");
+          const newContent = heading
+            ? `[Obsidian: ${new_title} | ${new_path} > ${heading}] ${body}`
+            : `[Obsidian: ${new_title} | ${new_path}] ${body}`;
+          const newMetadata = {
+            ...meta,
+            title: new_title,
+            path: new_path,
+          };
+          return supabase
+            .from("thoughts")
+            .update({
+              content: newContent,
+              metadata: newMetadata,
+              updated_at: now,
+            })
+            .eq("id", row.id);
+        });
+
+        const results = await Promise.all(updates);
+        const failed = results.filter((r) => r.error);
+        if (failed.length > 0) {
+          const first = failed[0].error!.message;
+          const extra =
+            failed.length > 1 ? ` (and ${failed.length - 1} more)` : "";
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `rename_note update phase failed: ${first}${extra}`,
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify({ note_id, rows_updated: rows.length }),
+            },
+          ],
+        };
+      } catch (err: unknown) {
+        return {
+          content: [
+            { type: "text" as const, text: `Error: ${(err as Error).message}` },
+          ],
+          isError: true,
+        };
+      }
+    }
+  );
 
   return server;
 }
@@ -1120,10 +1117,14 @@ app.all("*", async (c) => {
     Object.defineProperty(c.req, "raw", { value: patched, writable: true });
   }
 
-  const server = createServer();
+  const server = buildServer();
   const transport = new StreamableHTTPTransport();
   await server.connect(transport);
-  return transport.handleRequest(c);
+  const response = await transport.handleRequest(c);
+  if (!response) return c.json({ error: "No response from MCP transport" }, 500, corsHeaders);
+  response.headers.delete("mcp-session-id");
+  for (const [k, v] of Object.entries(corsHeaders)) response.headers.set(k, v);
+  return response;
 });
 
 Deno.serve(app.fetch);
